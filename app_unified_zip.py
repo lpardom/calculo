@@ -517,7 +517,7 @@ with col_btn2:
 # ============================================================
 if procesar and todos_csvs:
     with st.spinner(f"Procesando {tipo_eleccion.upper()}..."):
-        datos, votos_nac, archivos_ok, archivos_error = procesar_csvs(todos_csvs, tipo_eleccion)
+        datos, votos_nac, archivos_ok, archivos_error = _procesar_csvs_internal(todos_csvs, tipo_eleccion)
 
         if archivos_error:
             with st.expander(f"⚠️ Errores ({len(archivos_error)})"):
