@@ -436,7 +436,7 @@ with st.sidebar:
 st.markdown('<div class="main-header">🇵🇪 Simulador Electoral Perú 2026</div>', unsafe_allow_html=True)
 
 if tipo_eleccion == 'diputados':
-    st.markdown('<div class="sub-header"><span class="election-badge badge-diputados">🏛️ DIPUTADOS</span> 130 Escaños · Doble Valla Electoral · D'Hondt</div>', unsafe_allow_html=True)
+    st.markdown("<div class='sub-header'><span class='election-badge badge-diputados'>🏛️ DIPUTADOS</span> 130 Escaños · Doble Valla Electoral · D'Hondt</div>", unsafe_allow_html=True)
 elif tipo_eleccion == 'senado':
     st.markdown('<div class="sub-header"><span class="election-badge badge-senado">⚖️ SENADO</span> 30 Escaños · Distrito Único + Múltiple</div>', unsafe_allow_html=True)
 else:
