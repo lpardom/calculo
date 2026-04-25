@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import unicodedata
 import io
 import zipfile
@@ -7,6 +8,9 @@ import os
 import gc
 import glob
 from pathlib import Path
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 
 # ============================================================
 # CONFIGURACIÓN DE PÁGINA
@@ -19,24 +23,29 @@ st.set_page_config(
 )
 
 # ============================================================
-# CSS PERSONALIZADO
+# CSS PROFESIONAL
 # ============================================================
 st.markdown("""
 <style>
-    .main-header { font-size: 2.2rem; font-weight: bold; color: #D91023; text-align: center; }
-    .sub-header { font-size: 1.1rem; color: #555; text-align: center; margin-bottom: 1.5rem; }
-    .election-badge { display: inline-block; padding: 4px 12px; border-radius: 12px; font-size: 0.85rem; font-weight: bold; margin: 2px; }
-    .badge-diputados { background: #1f4e79; color: white; }
-    .badge-senado { background: #D91023; color: white; }
-    .badge-andino { background: #28a745; color: white; }
-    .info-box { background-color: #f8f9fa; border-left: 4px solid #D91023; padding: 1rem; margin: 1rem 0; border-radius: 0 8px 8px 0; }
-    .warning-box { background-color: #fff3cd; border-left: 4px solid #ffc107; padding: 1rem; margin: 1rem 0; border-radius: 0 8px 8px 0; }
-    .success-box { background-color: #e8f8e8; border-left: 4px solid #28a745; padding: 1rem; margin: 1rem 0; border-radius: 0 8px 8px 0; }
-    .stTabs [data-baseweb="tab-list"] { gap: 8px; }
-    .stTabs [data-baseweb="tab"] { background-color: #f0f2f6; border-radius: 4px 4px 0 0; padding: 10px 20px; font-weight: 600; }
-    .stTabs [aria-selected="true"] { background-color: #D91023 !important; color: white !important; }
-    .dataframe th { background-color: #D91023; color: white; font-weight: bold; text-align: center; }
-    .dataframe td { text-align: center; }
+    .main-header { font-size: 2.5rem; font-weight: 700; color: #1a1a2e; text-align: center; margin-bottom: 0.2rem; }
+    .sub-header { font-size: 1.1rem; color: #64748b; text-align: center; margin-bottom: 2rem; font-weight: 400; }
+    .election-badge { display: inline-block; padding: 6px 16px; border-radius: 20px; font-size: 0.85rem; font-weight: 600; margin: 2px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+    .badge-diputados { background: linear-gradient(135deg, #1e40af, #3b82f6); color: white; }
+    .badge-senado { background: linear-gradient(135deg, #991b1b, #ef4444); color: white; }
+    .badge-andino { background: linear-gradient(135deg, #065f46, #10b981); color: white; }
+    .card { background: white; border-radius: 12px; padding: 1.5rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1); border: 1px solid #e2e8f0; margin-bottom: 1rem; }
+    .card-title { font-size: 0.875rem; font-weight: 600; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.5rem; }
+    .card-value { font-size: 2rem; font-weight: 700; color: #1e293b; }
+    .info-box { background: linear-gradient(135deg, #f0f9ff, #e0f2fe); border-left: 4px solid #0ea5e9; padding: 1.25rem; margin: 1rem 0; border-radius: 0 12px 12px 0; }
+    .success-box { background: linear-gradient(135deg, #f0fdf4, #dcfce7); border-left: 4px solid #22c55e; padding: 1.25rem; margin: 1rem 0; border-radius: 0 12px 12px 0; }
+    .warning-box { background: linear-gradient(135deg, #fefce8, #fef9c3); border-left: 4px solid #eab308; padding: 1.25rem; margin: 1rem 0; border-radius: 0 12px 12px 0; }
+    .error-box { background: linear-gradient(135deg, #fef2f2, #fee2e2); border-left: 4px solid #ef4444; padding: 1.25rem; margin: 1rem 0; border-radius: 0 12px 12px 0; }
+    .stTabs [data-baseweb="tab-list"] { gap: 12px; }
+    .stTabs [data-baseweb="tab"] { background-color: #f1f5f9; border-radius: 8px 8px 0 0; padding: 12px 24px; font-weight: 600; color: #64748b; border: none; }
+    .stTabs [aria-selected="true"] { background: linear-gradient(135deg, #1e40af, #3b82f6) !important; color: white !important; box-shadow: 0 4px 6px rgba(59, 130, 246, 0.3); }
+    .dataframe th { background: linear-gradient(135deg, #1e40af, #3b82f6); color: white; font-weight: 600; text-align: center; padding: 12px; }
+    .dataframe td { text-align: center; padding: 10px; border-bottom: 1px solid #e2e8f0; }
+    .dataframe tr:hover td { background-color: #f8fafc; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -65,37 +74,41 @@ REGLA_MULTIPLE_SENADO = {
 }
 
 ESCAÑOS_ANDINO = 5
-EXCLUIR = ['VOTOS EN BLANCO', 'VOTOS NULOS']
+
+# IMPORTANTE: Lista de exclusiones con variaciones comunes
+EXCLUIR = [
+    'VOTOS EN BLANCO', 'VOTOS NULOS',
+    'VOTOS EN BLANCO ', 'VOTOS NULOS ',
+    ' VOTOS EN BLANCO', ' VOTOS NULOS',
+    'VOTOS EN BLANCO  ', 'VOTOS NULOS  '
+]
+
 COL_PARTIDO = 'ORGANIZACION POLÍTICA'
 COL_VOTOS = 'CANTIDAD DE VOTOS'
 
 # ============================================================
-# PATRONES DE DETECCIÓN AUTOMÁTICA (genéricos, sin fecha/hora)
+# PATRONES DE DETECCIÓN AUTOMÁTICA (CORREGIDOS)
 # ============================================================
 PATRONES_DETECCION = {
     'diputados': {
         'patron_zip': 'PR-ESP_Diputados_*.zip',
         'patron_carpeta': 'PR-ESP_Diputados_*',
-        'tipo': 'zip',
-        'descripcion': 'Diputados - 130 escaños'
+        'tipo': 'zip'
     },
     'senado_unico': {
         'patron_zip': 'PR-ESP_Senadores*Unico*.zip',
         'patron_carpeta': 'PR-ESP_Senadores*Unico*',
-        'tipo': 'zip',
-        'descripcion': 'Senado Distrito Unico - 30 escaños'
+        'tipo': 'zip'
     },
     'senado_multiple': {
         'patron_zip': 'PR-ESP_Senadores*Multiple*.zip',
         'patron_carpeta': 'PR-ESP_Senadores*Multiple*',
-        'tipo': 'zip',
-        'descripcion': 'Senado Distrito Multiple - 30 escaños'
+        'tipo': 'zip'
     },
     'andino': {
         'patron_zip': 'PR-ESP_Parlamento*Andino*.zip',
         'patron_carpeta': 'PR-ESP_Parlamento*Andino*',
-        'tipo': 'zip',
-        'descripcion': 'Parlamento Andino - 5 escaños'
+        'tipo': 'zip'
     }
 }
 
@@ -138,7 +151,6 @@ def detectar_region(nombre_archivo, diccionario_regiones):
     return region
 
 def extraer_csvs_de_zip_path(zip_path):
-    """Extrae CSVs desde una ruta de archivo ZIP local"""
     csv_files = []
     try:
         if not os.path.exists(zip_path):
@@ -158,7 +170,6 @@ def extraer_csvs_de_zip_path(zip_path):
     return csv_files
 
 def extraer_csvs_de_carpeta(carpeta_path):
-    """Extrae CSVs desde una carpeta local"""
     csv_files = []
     try:
         if not os.path.exists(carpeta_path):
@@ -178,17 +189,14 @@ def extraer_csvs_de_carpeta(carpeta_path):
     return csv_files
 
 def detectar_archivos_locales(tipo_eleccion):
-    """Detecta archivos locales usando patrones genéricos"""
     archivos_encontrados = {}
-
-    # Buscar en directorio actual y subdirectorios comunes
-    directorios_busqueda = ['.', 'data', 'archivos', 'input', 'PR-ESP']
+    directorios_busqueda = ['.', 'data', 'archivos', 'input']
 
     if tipo_eleccion == 'diputados':
         patrones = ['diputados']
     elif tipo_eleccion == 'senado':
         patrones = ['senado_unico', 'senado_multiple']
-    else:  # andino
+    else:
         patrones = ['andino']
 
     for patron_key in patrones:
@@ -199,17 +207,14 @@ def detectar_archivos_locales(tipo_eleccion):
             if not os.path.exists(directorio):
                 continue
 
-            # Buscar ZIP
             zip_pattern = os.path.join(directorio, info['patron_zip'])
             zip_matches = glob.glob(zip_pattern)
             if zip_matches:
-                # Tomar el más reciente si hay varios
                 zip_path = max(zip_matches, key=os.path.getmtime)
                 archivos_encontrados[patron_key] = {'tipo': 'zip', 'ruta': zip_path}
                 encontrado = True
                 break
 
-            # Buscar carpeta
             carpeta_pattern = os.path.join(directorio, info['patron_carpeta'])
             carpeta_matches = glob.glob(carpeta_pattern)
             if carpeta_matches:
@@ -223,8 +228,10 @@ def detectar_archivos_locales(tipo_eleccion):
 
     return archivos_encontrados
 
+# ============================================================
+# PROCESAMIENTO CON EXCLUSIÓN CORRECTA DE BLANCOS/NULOS
+# ============================================================
 def procesar_csvs(csv_list, tipo_eleccion):
-    """Procesa lista de CSVs según el tipo de elección"""
     datos = {}
     votos_nacionales = []
     archivos_ok = []
@@ -235,25 +242,34 @@ def procesar_csvs(csv_list, tipo_eleccion):
         distrito = csv_info.get('distrito', 'auto')
         try:
             csv_info['content'].seek(0)
-            df = pd.read_csv(csv_info['content'], low_memory=False, dtype=str,
-                           usecols=lambda col: col in [COL_PARTIDO, COL_VOTOS] or col.isdigit() or 'CANDIDATO' in col.upper())
+            df = pd.read_csv(csv_info['content'], low_memory=False, dtype=str)
             df.columns = df.columns.str.strip()
 
             if COL_PARTIDO not in df.columns or COL_VOTOS not in df.columns:
                 archivos_error.append(f"{nombre}: Columnas requeridas no encontradas")
                 continue
 
-            df = df[[COL_PARTIDO, COL_VOTOS]].copy()
-            df[COL_VOTOS] = pd.to_numeric(df[COL_VOTOS], errors='coerce').fillna(0)
+            # LIMPIAR ESPACIOS EN ORGANIZACION POLITICA
+            df[COL_PARTIDO] = df[COL_PARTIDO].str.strip()
+
+            # EXCLUIR BLANCOS Y NULOS - CORREGIDO
+            df_filtrado = df[~df[COL_PARTIDO].isin(EXCLUIR)].copy()
+
+            # Verificar si quedan datos después de filtrar
+            if df_filtrado.empty:
+                archivos_error.append(f"{nombre}: Solo contiene votos en blanco/nulos")
+                continue
+
+            df_filtrado[COL_VOTOS] = pd.to_numeric(df_filtrado[COL_VOTOS], errors='coerce').fillna(0)
 
             if tipo_eleccion == 'diputados':
                 region = detectar_region(nombre, ESCAÑOS_DIPUTADOS_2026)
                 if region and region in ESCAÑOS_DIPUTADOS_2026:
                     if region not in datos:
-                        datos[region] = df.groupby(COL_PARTIDO)[COL_VOTOS].sum()
+                        datos[region] = df_filtrado.groupby(COL_PARTIDO)[COL_VOTOS].sum()
                     else:
-                        datos[region] = datos[region].add(df.groupby(COL_PARTIDO)[COL_VOTOS].sum(), fill_value=0)
-                    votos_nacionales.append(df.groupby(COL_PARTIDO)[COL_VOTOS].sum())
+                        datos[region] = datos[region].add(df_filtrado.groupby(COL_PARTIDO)[COL_VOTOS].sum(), fill_value=0)
+                    votos_nacionales.append(df_filtrado.groupby(COL_PARTIDO)[COL_VOTOS].sum())
                     archivos_ok.append((region, nombre, csv_info.get('source', 'individual')))
                 else:
                     archivos_error.append(f"{nombre}: Region no detectada")
@@ -261,19 +277,19 @@ def procesar_csvs(csv_list, tipo_eleccion):
             elif tipo_eleccion == 'senado':
                 if distrito == 'unico':
                     if 'unico' not in datos:
-                        datos['unico'] = df.groupby(COL_PARTIDO)[COL_VOTOS].sum()
+                        datos['unico'] = df_filtrado.groupby(COL_PARTIDO)[COL_VOTOS].sum()
                     else:
-                        datos['unico'] = datos['unico'].add(df.groupby(COL_PARTIDO)[COL_VOTOS].sum(), fill_value=0)
-                    votos_nacionales.append(df.groupby(COL_PARTIDO)[COL_VOTOS].sum())
+                        datos['unico'] = datos['unico'].add(df_filtrado.groupby(COL_PARTIDO)[COL_VOTOS].sum(), fill_value=0)
+                    votos_nacionales.append(df_filtrado.groupby(COL_PARTIDO)[COL_VOTOS].sum())
                     archivos_ok.append(('DISTRITO UNICO', nombre, csv_info.get('source', 'individual')))
                 elif distrito == 'multiple':
                     region = detectar_region(nombre, REGLA_MULTIPLE_SENADO)
                     if region and region in REGLA_MULTIPLE_SENADO:
                         if region not in datos:
-                            datos[region] = df.groupby(COL_PARTIDO)[COL_VOTOS].sum()
+                            datos[region] = df_filtrado.groupby(COL_PARTIDO)[COL_VOTOS].sum()
                         else:
-                            datos[region] = datos[region].add(df.groupby(COL_PARTIDO)[COL_VOTOS].sum(), fill_value=0)
-                        votos_nacionales.append(df.groupby(COL_PARTIDO)[COL_VOTOS].sum())
+                            datos[region] = datos[region].add(df_filtrado.groupby(COL_PARTIDO)[COL_VOTOS].sum(), fill_value=0)
+                        votos_nacionales.append(df_filtrado.groupby(COL_PARTIDO)[COL_VOTOS].sum())
                         archivos_ok.append((region, nombre, csv_info.get('source', 'individual')))
                     else:
                         archivos_error.append(f"{nombre}: Region no detectada")
@@ -281,28 +297,28 @@ def procesar_csvs(csv_list, tipo_eleccion):
                     nombre_norm = eliminar_tildes(nombre)
                     if 'UNICO' in nombre_norm or 'UNICO' in nombre_norm:
                         if 'unico' not in datos:
-                            datos['unico'] = df.groupby(COL_PARTIDO)[COL_VOTOS].sum()
+                            datos['unico'] = df_filtrado.groupby(COL_PARTIDO)[COL_VOTOS].sum()
                         else:
-                            datos['unico'] = datos['unico'].add(df.groupby(COL_PARTIDO)[COL_VOTOS].sum(), fill_value=0)
-                        votos_nacionales.append(df.groupby(COL_PARTIDO)[COL_VOTOS].sum())
+                            datos['unico'] = datos['unico'].add(df_filtrado.groupby(COL_PARTIDO)[COL_VOTOS].sum(), fill_value=0)
+                        votos_nacionales.append(df_filtrado.groupby(COL_PARTIDO)[COL_VOTOS].sum())
                         archivos_ok.append(('DISTRITO UNICO', nombre, csv_info.get('source', 'individual')))
                     else:
                         region = detectar_region(nombre, REGLA_MULTIPLE_SENADO)
                         if region and region in REGLA_MULTIPLE_SENADO:
                             if region not in datos:
-                                datos[region] = df.groupby(COL_PARTIDO)[COL_VOTOS].sum()
+                                datos[region] = df_filtrado.groupby(COL_PARTIDO)[COL_VOTOS].sum()
                             else:
-                                datos[region] = datos[region].add(df.groupby(COL_PARTIDO)[COL_VOTOS].sum(), fill_value=0)
-                            votos_nacionales.append(df.groupby(COL_PARTIDO)[COL_VOTOS].sum())
+                                datos[region] = datos[region].add(df_filtrado.groupby(COL_PARTIDO)[COL_VOTOS].sum(), fill_value=0)
+                            votos_nacionales.append(df_filtrado.groupby(COL_PARTIDO)[COL_VOTOS].sum())
                             archivos_ok.append((region, nombre, csv_info.get('source', 'individual')))
                         else:
                             archivos_error.append(f"{nombre}: Distrito no detectado")
 
             elif tipo_eleccion == 'andino':
-                votos_nacionales.append(df.groupby(COL_PARTIDO)[COL_VOTOS].sum())
+                votos_nacionales.append(df_filtrado.groupby(COL_PARTIDO)[COL_VOTOS].sum())
                 archivos_ok.append(('NACIONAL', nombre, csv_info.get('source', 'individual')))
 
-            del df
+            del df, df_filtrado
             gc.collect()
 
         except Exception as e:
@@ -313,12 +329,90 @@ def procesar_csvs(csv_list, tipo_eleccion):
 
     return datos, votos_nacionales, archivos_ok, archivos_error
 
+def cruzar_con_excel(df_candidatos, uploaded_excel):
+    if uploaded_excel is None or df_candidatos.empty:
+        return df_candidatos
+    try:
+        df_maestro = pd.read_excel(uploaded_excel)
+        df_maestro.columns = df_maestro.columns.str.strip().str.upper()
+
+        df_candidatos['REGION_KEY'] = df_candidatos['Región'].apply(eliminar_tildes).str.strip()
+        df_maestro['REGION_KEY'] = df_maestro['REGION'].apply(eliminar_tildes).str.strip()
+        df_candidatos['PARTIDO_KEY'] = df_candidatos['Partido'].apply(eliminar_tildes).str.strip()
+        df_maestro['PARTIDO_KEY'] = df_maestro['ORGANIZACION_POLITICA'].apply(eliminar_tildes).str.strip()
+        df_candidatos['Candidato/Nro'] = df_candidatos['Candidato/Nro'].astype(str).str.extract(r'(\d+)')
+        df_maestro['NUMERO'] = df_maestro['NUMERO'].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
+
+        df_maestro_u = df_maestro.drop_duplicates(subset=['REGION_KEY', 'PARTIDO_KEY', 'NUMERO'], keep='first')
+
+        df_merge = pd.merge(
+            df_candidatos,
+            df_maestro_u[['REGION_KEY', 'PARTIDO_KEY', 'NUMERO', 'CANDIDATO']],
+            left_on=['REGION_KEY', 'PARTIDO_KEY', 'Candidato/Nro'],
+            right_on=['REGION_KEY', 'PARTIDO_KEY', 'NUMERO'],
+            how='left'
+        )
+
+        df_result = df_merge[['Región', 'Partido', 'Candidato/Nro', 'CANDIDATO', 'Votos Preferenciales']].copy()
+        df_result.columns = ['Región', 'Partido', 'N°', 'Nombre del Candidato', 'Votos Preferenciales']
+        df_result['Nombre del Candidato'] = df_result['Nombre del Candidato'].fillna('(NO ENCONTRADO EN EXCEL)')
+
+        del df_maestro, df_maestro_u, df_merge
+        gc.collect()
+
+        return df_result
+    except Exception as e:
+        st.warning(f"Error cruzando con Excel: {e}")
+        df_candidatos['N°'] = df_candidatos['Candidato/Nro']
+        df_candidatos['Nombre del Candidato'] = '(ERROR EN EXCEL)'
+        return df_candidatos[['Región', 'Partido', 'N°', 'Nombre del Candidato', 'Votos Preferenciales']]
+
+def generar_imagen_tabla(df, titulo):
+    fig, ax = plt.subplots(figsize=(min(20, max(12, len(df.columns) * 2)), min(15, max(8, len(df) * 0.5 + 2))))
+    ax.axis('tight')
+    ax.axis('off')
+
+    colColours = ['#1e40af'] * len(df.columns)
+    cellColours = [['#f8fafc'] * len(df.columns) for _ in range(len(df))]
+
+    for i, idx in enumerate(df.index):
+        if 'TOTAL' in str(idx):
+            cellColours[i] = ['#e0f2fe'] * len(df.columns)
+
+    tabla = ax.table(cellText=df.values, colLabels=df.columns, rowLabels=df.index,
+                    cellLoc='center', loc='center', colColours=colColours,
+                    cellColours=cellColours)
+    tabla.auto_set_font_size(False)
+    tabla.set_fontsize(9)
+    tabla.scale(1, 1.5)
+
+    for i in range(len(df.columns)):
+        tabla[(0, i)].set_text_props(color='white', fontweight='bold')
+
+    plt.title(titulo, fontsize=14, fontweight='bold', pad=20)
+
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', dpi=150, bbox_inches='tight', facecolor='white')
+    buf.seek(0)
+    plt.close(fig)
+    return buf
+
+# ============================================================
+# INICIALIZAR SESSION STATE (CACHÉ PERSISTENTE)
+# ============================================================
+if 'cache_resultados' not in st.session_state:
+    st.session_state.cache_resultados = {}
+if 'cache_procesado' not in st.session_state:
+    st.session_state.cache_procesado = None
+if 'cache_excel' not in st.session_state:
+    st.session_state.cache_excel = None
+
 # ============================================================
 # SIDEBAR
 # ============================================================
 with st.sidebar:
-    st.markdown("<h1 style='text-align:center; color:#D91023;'>🇵🇪 PERÚ 2026</h1>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align:center; color:#666;'>Simulador Electoral Integral</p>", unsafe_allow_html=True)
+    st.markdown("<h1 style='text-align:center; color:#1e40af; font-size:1.8rem;'>🇵🇪 PERÚ 2026</h1>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align:center; color:#64748b; font-size:0.9rem;'>Simulador Electoral Integral</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.subheader("🗳️ Tipo de Elección")
@@ -327,39 +421,39 @@ with st.sidebar:
         format_func=lambda x: x[1], index=0)[0]
 
     st.markdown("---")
-    st.subheader("📁 Modo de Carga")
+    st.subheader("📁 Archivos Detectados")
 
-    # Detectar archivos locales automáticamente
     archivos_locales = detectar_archivos_locales(tipo_eleccion)
     hay_locales = any(v is not None for v in archivos_locales.values())
 
     if hay_locales:
-        st.markdown("""
-        <div class="success-box">
-        <b>✅ Archivos locales detectados</b><br>
-        Se usarán automáticamente los archivos del repositorio.
-        </div>
-        """, unsafe_allow_html=True)
-        modo_carga = 'auto'
+        st.markdown('<div class="success-box"><b>✅ Archivos detectados</b></div>', unsafe_allow_html=True)
+        for key, info in archivos_locales.items():
+            if info:
+                st.markdown(f"• `{os.path.basename(info['ruta'])}`")
     else:
-        st.markdown("""
-        <div class="warning-box">
-        <b>⚠️ No se detectaron archivos locales</b><br>
-        Sube los archivos manualmente o verifica las rutas.
-        </div>
-        """, unsafe_allow_html=True)
-        modo_carga = 'manual'
+        st.markdown('<div class="warning-box"><b>⚠️ Sin archivos locales</b></div>', unsafe_allow_html=True)
 
-    # Opción manual siempre disponible
-    with st.expander("📤 Carga Manual (opcional)", expanded=not hay_locales):
+    with st.expander("📤 Carga Manual", expanded=not hay_locales):
         if tipo_eleccion == 'senado':
-            uploaded_zip_unico = st.file_uploader("ZIP/RAR Distrito Unico", type=["zip", "rar"], key=f"manual_unico_{tipo_eleccion}")
-            uploaded_zip_multiple = st.file_uploader("ZIP/RAR Distrito Multiple", type=["zip", "rar"], key=f"manual_multiple_{tipo_eleccion}")
+            uploaded_zip_unico = st.file_uploader("ZIP/RAR Distrito Único", type=["zip", "rar"], key=f"manual_unico_{tipo_eleccion}")
+            uploaded_zip_multiple = st.file_uploader("ZIP/RAR Distrito Múltiple", type=["zip", "rar"], key=f"manual_multiple_{tipo_eleccion}")
         else:
             uploaded_zip = st.file_uploader("ZIP con CSVs", type=["zip", "rar"], key=f"manual_zip_{tipo_eleccion}")
 
     st.markdown("---")
-    st.caption("v8.0 - Detección automática + Carga manual")
+    st.subheader("📊 Excel de Candidatos")
+    uploaded_excel = st.file_uploader("Maestro (Opcional)", type=["xlsx", "xls"], key=f"excel_{tipo_eleccion}")
+
+    st.markdown("---")
+    st.subheader("🔄 Control")
+    if st.button("🚀 ACTUALIZAR DATOS", type="primary", use_container_width=True):
+        st.session_state.cache_resultados = {}
+        st.session_state.cache_procesado = None
+        st.session_state.cache_excel = None
+        st.rerun()
+
+    st.caption("v10.0 - Caché persistente")
 
 # ============================================================
 # HEADER
@@ -369,336 +463,383 @@ st.markdown('<div class="main-header">🇵🇪 Simulador Electoral Perú 2026</d
 if tipo_eleccion == 'diputados':
     st.markdown('<div class="sub-header"><span class="election-badge badge-diputados">🏛️ DIPUTADOS</span> 130 Escaños · Doble Valla Electoral · DHondt</div>', unsafe_allow_html=True)
 elif tipo_eleccion == 'senado':
-    st.markdown('<div class="sub-header"><span class="election-badge badge-senado">⚖️ SENADO</span> 60 Escaños · 30 Unico + 30 Multiple</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sub-header"><span class="election-badge badge-senado">⚖️ SENADO</span> 60 Escaños · 30 Único + 30 Múltiple</div>', unsafe_allow_html=True)
 else:
     st.markdown('<div class="sub-header"><span class="election-badge badge-andino">🌎 PARLAMENTO ANDINO</span> 5 Escaños · Circunscripción Única</div>', unsafe_allow_html=True)
 
 # ============================================================
-# CARGA DE ARCHIVOS (AUTO O MANUAL)
+# VERIFICAR CACHÉ
 # ============================================================
-todos_csvs = []
+cache_key = f"{tipo_eleccion}_{hash(str(archivos_locales))}"
 
-# 1. INTENTAR CARGA AUTOMÁTICA
-if modo_carga == 'auto':
-    st.info("🔍 Buscando archivos locales...")
+if cache_key in st.session_state.cache_resultados and st.session_state.cache_procesado == tipo_eleccion:
+    # USAR CACHÉ
+    r = st.session_state.cache_resultados[cache_key]
+    datos = r['datos']
+    votos_nac = r['votos_nac']
+    archivos_ok = r['archivos_ok']
+    archivos_error = r['archivos_error']
+    cuadro = r['cuadro']
+    total_escaños = r['total_escaños']
+    total_votos = r['total_votos']
+    partidos_aptos = r['partidos_aptos']
+    df_candidatos = r.get('df_candidatos', pd.DataFrame())
 
-    if tipo_eleccion == 'senado':
-        # Senado: 2 archivos
-        unico_info = archivos_locales.get('senado_unico')
-        multiple_info = archivos_locales.get('senado_multiple')
+    st.success("📦 Mostrando resultados en caché. Presiona '🚀 ACTUALIZAR DATOS' para recalcular.")
+else:
+    # ============================================================
+    # CARGA DE ARCHIVOS
+    # ============================================================
+    todos_csvs = []
 
-        if unico_info:
-            if unico_info['tipo'] == 'zip':
-                csvs = extraer_csvs_de_zip_path(unico_info['ruta'])
-            else:
-                csvs = extraer_csvs_de_carpeta(unico_info['ruta'])
-            for c in csvs: c['distrito'] = 'unico'
-            todos_csvs.extend(csvs)
-            st.success(f"✅ Distrito Unico cargado: `{os.path.basename(unico_info['ruta'])}`")
+    if hay_locales:
+        if tipo_eleccion == 'senado':
+            unico_info = archivos_locales.get('senado_unico')
+            multiple_info = archivos_locales.get('senado_multiple')
 
-        if multiple_info:
-            if multiple_info['tipo'] == 'zip':
-                csvs = extraer_csvs_de_zip_path(multiple_info['ruta'])
-            else:
-                csvs = extraer_csvs_de_carpeta(multiple_info['ruta'])
-            for c in csvs: c['distrito'] = 'multiple'
-            todos_csvs.extend(csvs)
-            st.success(f"✅ Distrito Multiple cargado: `{os.path.basename(multiple_info['ruta'])}`")
-    else:
-        # Diputados o Andino: 1 archivo
-        clave = 'diputados' if tipo_eleccion == 'diputados' else 'andino'
-        info = archivos_locales.get(clave)
+            if unico_info:
+                if unico_info['tipo'] == 'zip':
+                    csvs = extraer_csvs_de_zip_path(unico_info['ruta'])
+                else:
+                    csvs = extraer_csvs_de_carpeta(unico_info['ruta'])
+                for c in csvs: c['distrito'] = 'unico'
+                todos_csvs.extend(csvs)
+                st.success(f"✅ Único: `{os.path.basename(unico_info['ruta'])}`")
 
-        if info:
-            if info['tipo'] == 'zip':
-                todos_csvs = extraer_csvs_de_zip_path(info['ruta'])
-            else:
-                todos_csvs = extraer_csvs_de_carpeta(info['ruta'])
-            st.success(f"✅ Archivo cargado: `{os.path.basename(info['ruta'])}`")
+            if multiple_info:
+                if multiple_info['tipo'] == 'zip':
+                    csvs = extraer_csvs_de_zip_path(multiple_info['ruta'])
+                else:
+                    csvs = extraer_csvs_de_carpeta(multiple_info['ruta'])
+                for c in csvs: c['distrito'] = 'multiple'
+                todos_csvs.extend(csvs)
+                st.success(f"✅ Múltiple: `{os.path.basename(multiple_info['ruta'])}`")
+        else:
+            clave = 'diputados' if tipo_eleccion == 'diputados' else 'andino'
+            info = archivos_locales.get(clave)
 
-# 2. SI NO HAY LOCALES, USAR MANUAL
-if not todos_csvs:
-    st.warning("⚠️ No se encontraron archivos locales. Usando carga manual...")
+            if info:
+                if info['tipo'] == 'zip':
+                    todos_csvs = extraer_csvs_de_zip_path(info['ruta'])
+                else:
+                    todos_csvs = extraer_csvs_de_carpeta(info['ruta'])
+                st.success(f"✅ `{os.path.basename(info['ruta'])}`")
 
-    if tipo_eleccion == 'senado':
-        if 'uploaded_zip_unico' in locals() and uploaded_zip_unico:
-            if uploaded_zip_unico.name.lower().endswith('.zip'):
-                import zipfile
+    # Carga manual
+    if not todos_csvs:
+        st.warning("⚠️ Usando carga manual...")
+        if tipo_eleccion == 'senado':
+            if 'uploaded_zip_unico' in locals() and uploaded_zip_unico:
                 with zipfile.ZipFile(uploaded_zip_unico) as z:
                     for name in z.namelist():
                         if name.lower().endswith('.csv'):
                             with z.open(name) as f:
                                 todos_csvs.append({'name': os.path.basename(name), 'content': io.BytesIO(f.read()), 'distrito': 'unico', 'source': 'manual'})
-        if 'uploaded_zip_multiple' in locals() and uploaded_zip_multiple:
-            if uploaded_zip_multiple.name.lower().endswith('.zip'):
-                import zipfile
+            if 'uploaded_zip_multiple' in locals() and uploaded_zip_multiple:
                 with zipfile.ZipFile(uploaded_zip_multiple) as z:
                     for name in z.namelist():
                         if name.lower().endswith('.csv'):
                             with z.open(name) as f:
                                 todos_csvs.append({'name': os.path.basename(name), 'content': io.BytesIO(f.read()), 'distrito': 'multiple', 'source': 'manual'})
-    else:
-        if 'uploaded_zip' in locals() and uploaded_zip:
-            if uploaded_zip.name.lower().endswith('.zip'):
-                import zipfile
+        else:
+            if 'uploaded_zip' in locals() and uploaded_zip:
                 with zipfile.ZipFile(uploaded_zip) as z:
                     for name in z.namelist():
                         if name.lower().endswith('.csv'):
                             with z.open(name) as f:
                                 todos_csvs.append({'name': os.path.basename(name), 'content': io.BytesIO(f.read()), 'source': 'manual'})
 
-# Verificar que tenemos archivos
-if not todos_csvs:
-    st.error("""
-    ❌ No se encontraron archivos para procesar.
-
-    **Opciones:**
-    1. **Precarga automática:** Coloca los archivos en el repositorio con estos patrones:
-       - Diputados: `PR-ESP_Diputados_*.zip`
-       - Senado Unico: `PR-ESP_Senadores*Unico*.zip`
-       - Senado Multiple: `PR-ESP_Senadores*Multiple*.zip`
-       - Andino: `PR-ESP_Parlamento*Andino*.zip`
-
-    2. **Carga manual:** Usa el panel lateral para subir archivos ZIP.
-    """)
-    st.stop()
-
-st.success(f"📦 Total de CSVs listos para procesar: {len(todos_csvs)}")
-
-# ============================================================
-# PROCESAMIENTO AUTOMÁTICO
-# ============================================================
-with st.spinner("⏳ Procesando elecciones..."):
-    datos, votos_nac, archivos_ok, archivos_error = procesar_csvs(todos_csvs, tipo_eleccion)
-
-    if archivos_error:
-        with st.expander(f"⚠️ Errores ({len(archivos_error)})"):
-            for err in archivos_error:
-                st.markdown(f"- {err}")
-
-    if not datos:
-        st.error("No se pudieron procesar archivos válidos.")
+    if not todos_csvs:
+        st.error("❌ No se encontraron archivos.")
         st.stop()
 
-    st.success(f"✅ {len(archivos_ok)} archivos procesados correctamente.")
+    # ============================================================
+    # PROCESAMIENTO
+    # ============================================================
+    with st.spinner("⏳ Procesando..."):
+        datos, votos_nac, archivos_ok, archivos_error = procesar_csvs(todos_csvs, tipo_eleccion)
 
-    # =====================================================
-    # CÁLCULOS ELECTORALES
-    # =====================================================
+        if archivos_error:
+            with st.expander(f"⚠️ Errores ({len(archivos_error)})"):
+                for err in archivos_error:
+                    st.markdown(f"- {err}")
 
-    if tipo_eleccion == 'diputados':
-        df_nacional = pd.concat(votos_nac).groupby(level=0).sum().reset_index()
-        df_nacional.columns = [COL_PARTIDO, COL_VOTOS]
-        total_votos = df_nacional[COL_VOTOS].sum()
-        pasan_5 = df_nacional[df_nacional[COL_VOTOS] >= (total_votos * 0.05)][COL_PARTIDO].tolist()
+        if not datos:
+            st.error("No se pudieron procesar archivos válidos.")
+            st.stop()
 
-        escaños_sim = []
-        for region, series in datos.items():
-            n = ESCAÑOS_DIPUTADOS_2026.get(region, 0)
-            if n > 0:
+        st.success(f"✅ {len(archivos_ok)} archivos procesados.")
+
+        # =====================================================
+        # CÁLCULOS
+        # =====================================================
+        if tipo_eleccion == 'diputados':
+            df_nacional = pd.concat(votos_nac).groupby(level=0).sum().reset_index()
+            df_nacional.columns = [COL_PARTIDO, COL_VOTOS]
+            total_votos = df_nacional[COL_VOTOS].sum()
+            pasan_5 = df_nacional[df_nacional[COL_VOTOS] >= (total_votos * 0.05)][COL_PARTIDO].tolist()
+
+            escaños_sim = []
+            for region, series in datos.items():
+                n = ESCAÑOS_DIPUTADOS_2026.get(region, 0)
+                if n > 0:
+                    df_temp = series.reset_index()
+                    df_temp.columns = [COL_PARTIDO, COL_VOTOS]
+                    escaños_sim.append(calcular_dhondt(df_temp, n, COL_PARTIDO, COL_VOTOS))
+
+            df_sim = pd.concat(escaños_sim).groupby('Partido')['Escaños'].sum().reset_index()
+            pasan_7 = df_sim[df_sim['Escaños'] >= 7]['Partido'].tolist()
+            partidos_aptos = list(set(pasan_5) & set(pasan_7))
+
+            resultados_list = []
+            for region, series in datos.items():
+                n_esc = ESCAÑOS_DIPUTADOS_2026.get(region, 0)
                 df_temp = series.reset_index()
                 df_temp.columns = [COL_PARTIDO, COL_VOTOS]
-                escaños_sim.append(calcular_dhondt(df_temp, n, COL_PARTIDO, COL_VOTOS))
+                df_f = df_temp[df_temp[COL_PARTIDO].isin(partidos_aptos)].copy()
+                if n_esc > 0 and not df_f.empty:
+                    df_res = calcular_dhondt(df_f, n_esc, COL_PARTIDO, COL_VOTOS)
+                    df_res['Region'] = region
+                    resultados_list.append(df_res)
 
-        df_sim = pd.concat(escaños_sim).groupby('Partido')['Escaños'].sum().reset_index()
-        pasan_7 = df_sim[df_sim['Escaños'] >= 7]['Partido'].tolist()
-        partidos_aptos = list(set(pasan_5) & set(pasan_7))
+            df_final = pd.concat(resultados_list, ignore_index=True)
+            cuadro = df_final.pivot(index='Region', columns='Partido', values='Escaños').fillna(0).astype(int)
+            totales = cuadro.sum().sort_values(ascending=False)
+            cuadro = cuadro.reindex(columns=totales.index.tolist()).sort_index()
+            cuadro['TOTAL REGION'] = cuadro.sum(axis=1)
+            cuadro.loc['TOTAL NACIONAL'] = cuadro.sum(numeric_only=True)
 
-        resultados = []
-        for region, series in datos.items():
-            n_esc = ESCAÑOS_DIPUTADOS_2026.get(region, 0)
-            df_temp = series.reset_index()
-            df_temp.columns = [COL_PARTIDO, COL_VOTOS]
-            df_f = df_temp[df_temp[COL_PARTIDO].isin(partidos_aptos)].copy()
-            if n_esc > 0 and not df_f.empty:
-                df_res = calcular_dhondt(df_f, n_esc, COL_PARTIDO, COL_VOTOS)
-                df_res['Region'] = region
-                resultados.append(df_res)
+            total_escaños = int(cuadro.loc['TOTAL NACIONAL', 'TOTAL REGION'])
 
-        df_final = pd.concat(resultados, ignore_index=True)
-        cuadro = df_final.pivot(index='Region', columns='Partido', values='Escaños').fillna(0).astype(int)
-        totales = cuadro.sum().sort_values(ascending=False)
-        cuadro = cuadro.reindex(columns=totales.index.tolist()).sort_index()
-        cuadro['TOTAL REGION'] = cuadro.sum(axis=1)
-        cuadro.loc['TOTAL NACIONAL'] = cuadro.sum(numeric_only=True)
+            # Candidatos
+            candidatos = []
+            for region in datos.keys():
+                res_reg = df_final[df_final['Region'] == region]
+                if res_reg.empty: continue
 
-        total_escaños = int(cuadro.loc['TOTAL NACIONAL', 'TOTAL REGION'])
+                archivos_reg = [c for c in todos_csvs if eliminar_tildes(c['name']).find(eliminar_tildes(region)) != -1]
+                if archivos_reg:
+                    votos_partidos = {}
+                    for c in archivos_reg:
+                        c['content'].seek(0)
+                        df_temp = pd.read_csv(c['content'], low_memory=False, dtype=str)
+                        df_temp.columns = df_temp.columns.str.strip()
 
-        # Candidatos
-        candidatos = []
-        for region in datos.keys():
-            res_reg = df_final[df_final['Region'] == region]
-            if res_reg.empty: continue
+                        for _, fp in res_reg.iterrows():
+                            partido = fp['Partido']
+                            num_esc = int(fp['Escaños'])
+                            if num_esc > 0:
+                                if partido not in votos_partidos:
+                                    votos_partidos[partido] = {}
 
-            archivos_reg = [c for c in todos_csvs if eliminar_tildes(c['name']).find(eliminar_tildes(region)) != -1]
-            if archivos_reg:
-                votos_partidos = {}
-                for c in archivos_reg:
-                    c['content'].seek(0)
-                    df_temp = pd.read_csv(c['content'], low_memory=False, dtype=str,
-                                        usecols=lambda col: col in [COL_PARTIDO] or col.isdigit() or 'CANDIDATO' in col.upper())
-                    df_temp.columns = df_temp.columns.str.strip()
+                                df_p = df_temp[df_temp[COL_PARTIDO] == partido]
+                                cols_cands = [col for col in df_temp.columns if col != COL_PARTIDO and (col.isdigit() or 'CANDIDATO' in col.upper())]
 
-                    for _, fp in res_reg.iterrows():
-                        partido = fp['Partido']
-                        num_esc = int(fp['Escaños'])
+                                for col in cols_cands:
+                                    if col not in votos_partidos[partido]:
+                                        votos_partidos[partido][col] = 0
+                                    votos_partidos[partido][col] += pd.to_numeric(df_p[col], errors='coerce').sum()
+
+                        del df_temp
+                        gc.collect()
+
+                    for partido, votos_cands in votos_partidos.items():
+                        num_esc = int(res_reg[res_reg['Partido'] == partido]['Escaños'].iloc[0])
                         if num_esc > 0:
-                            if partido not in votos_partidos:
-                                votos_partidos[partido] = {}
+                            sorted_cands = sorted(votos_cands.items(), key=lambda x: x[1], reverse=True)[:num_esc]
+                            for cand, votos in sorted_cands:
+                                candidatos.append({'Región': region, 'Partido': partido, 'Candidato/Nro': cand, 'Votos Preferenciales': int(votos)})
 
-                            df_p = df_temp[df_temp[COL_PARTIDO] == partido]
-                            cols_cands = [col for col in df_temp.columns if col != COL_PARTIDO and (col.isdigit() or 'CANDIDATO' in col.upper())]
+            df_candidatos = pd.DataFrame(candidatos)
 
-                            for col in cols_cands:
-                                if col not in votos_partidos[partido]:
-                                    votos_partidos[partido][col] = 0
-                                votos_partidos[partido][col] += pd.to_numeric(df_p[col], errors='coerce').sum()
+            # CRUZAR CON EXCEL
+            if uploaded_excel is not None and not df_candidatos.empty:
+                df_candidatos = cruzar_con_excel(df_candidatos, uploaded_excel)
 
-                    del df_temp
-                    gc.collect()
+            del df_nacional, df_sim, df_final, resultados_list
+            gc.collect()
 
-                for partido, votos_cands in votos_partidos.items():
-                    num_esc = int(res_reg[res_reg['Partido'] == partido]['Escaños'].iloc[0])
-                    if num_esc > 0:
-                        sorted_cands = sorted(votos_cands.items(), key=lambda x: x[1], reverse=True)[:num_esc]
-                        for cand, votos in sorted_cands:
-                            candidatos.append({'Región': region, 'Partido': partido, 'Candidato/Nro': cand, 'Votos Preferenciales': int(votos)})
+        elif tipo_eleccion == 'senado':
+            df_unico = datos.get('unico', pd.Series())
+            if not df_unico.empty:
+                df_unico = df_unico.reset_index()
+                df_unico.columns = [COL_PARTIDO, COL_VOTOS]
 
-        df_candidatos = pd.DataFrame(candidatos)
+            datos_mult = {k: v.reset_index().rename(columns={0: COL_PARTIDO, 1: COL_VOTOS}) for k, v in datos.items() if k != 'unico'}
 
-        del df_nacional, df_sim, df_final, resultados
-        gc.collect()
+            if df_unico.empty:
+                st.error("❌ No se encontró Distrito Único.")
+                st.stop()
+            if not datos_mult:
+                st.error("❌ No se encontró Distrito Múltiple.")
+                st.stop()
 
-    elif tipo_eleccion == 'senado':
-        df_unico = datos.get('unico', pd.Series())
-        if not df_unico.empty:
-            df_unico = df_unico.reset_index()
-            df_unico.columns = [COL_PARTIDO, COL_VOTOS]
+            votos_nac_df = pd.concat(votos_nac).groupby(level=0).sum().reset_index()
+            votos_nac_df.columns = [COL_PARTIDO, COL_VOTOS]
+            total_v = votos_nac_df[COL_VOTOS].sum()
+            pasan_5 = votos_nac_df[votos_nac_df[COL_VOTOS] >= (total_v * 0.05)][COL_PARTIDO].tolist()
 
-        datos_mult = {k: v.reset_index().rename(columns={0: COL_PARTIDO, 1: COL_VOTOS}) for k, v in datos.items() if k != 'unico'}
+            sim_u = calcular_dhondt(df_unico, ESCAÑOS_SENADO_UNICO, COL_PARTIDO, COL_VOTOS)
+            sim_m = [calcular_dhondt(v, REGLA_MULTIPLE_SENADO.get(k, 1), COL_PARTIDO, COL_VOTOS) for k, v in datos_mult.items()]
+            df_sim = pd.concat([sim_u] + sim_m).groupby('Partido')['Escaños'].sum().reset_index()
+            pasan_3 = df_sim[df_sim['Escaños'] >= 3]['Partido'].tolist()
+            partidos_aptos = list(set(pasan_5) & set(pasan_3))
 
-        if df_unico.empty:
-            st.error("No se encontraron datos del Distrito Unico.")
-            st.stop()
-        if not datos_mult:
-            st.error("No se encontraron datos del Distrito Multiple.")
-            st.stop()
+            res_u = calcular_dhondt(df_unico[df_unico[COL_PARTIDO].isin(partidos_aptos)], ESCAÑOS_SENADO_UNICO, COL_PARTIDO, COL_VOTOS)
 
-        votos_nac_df = pd.concat(votos_nac).groupby(level=0).sum().reset_index()
-        votos_nac_df.columns = [COL_PARTIDO, COL_VOTOS]
-        total_v = votos_nac_df[COL_VOTOS].sum()
-        pasan_5 = votos_nac_df[votos_nac_df[COL_VOTOS] >= (total_v * 0.05)][COL_PARTIDO].tolist()
+            res_m = []
+            for reg, df_v in datos_mult.items():
+                df_f = df_v[df_v[COL_PARTIDO].isin(partidos_aptos)]
+                n = REGLA_MULTIPLE_SENADO.get(reg, 1)
+                if not df_f.empty:
+                    df_r = calcular_dhondt(df_f, n, COL_PARTIDO, COL_VOTOS)
+                    df_r['Region'] = reg
+                    res_m.append(df_r)
 
-        sim_u = calcular_dhondt(df_unico, ESCAÑOS_SENADO_UNICO, COL_PARTIDO, COL_VOTOS)
-        sim_m = [calcular_dhondt(v, REGLA_MULTIPLE_SENADO.get(k, 1), COL_PARTIDO, COL_VOTOS) for k, v in datos_mult.items()]
-        df_sim = pd.concat([sim_u] + sim_m).groupby('Partido')['Escaños'].sum().reset_index()
-        pasan_3 = df_sim[df_sim['Escaños'] >= 3]['Partido'].tolist()
-        partidos_aptos = list(set(pasan_5) & set(pasan_3))
+            if res_m:
+                matriz_reg = pd.concat(res_m).pivot(index='Region', columns='Partido', values='Escaños').fillna(0).astype(int)
+                fila_mult = matriz_reg.sum().to_frame().T
+                fila_mult.index = ['DISTRITO MÚLTIPLE (30 escaños)']
+            else:
+                matriz_reg = pd.DataFrame()
+                fila_mult = pd.DataFrame()
 
-        res_u = calcular_dhondt(df_unico[df_unico[COL_PARTIDO].isin(partidos_aptos)], ESCAÑOS_SENADO_UNICO, COL_PARTIDO, COL_VOTOS)
+            fila_u = res_u.set_index('Partido')['Escaños'].to_frame().T
+            fila_u.index = ['DISTRITO ÚNICO (30 escaños)']
 
-        res_m = []
-        for reg, df_v in datos_mult.items():
-            df_f = df_v[df_v[COL_PARTIDO].isin(partidos_aptos)]
-            n = REGLA_MULTIPLE_SENADO.get(reg, 1)
-            if not df_f.empty:
-                df_r = calcular_dhondt(df_f, n, COL_PARTIDO, COL_VOTOS)
-                df_r['Region'] = reg
-                res_m.append(df_r)
+            if not fila_mult.empty:
+                total_por_partido = pd.concat([fila_mult, fila_u]).sum().sort_values(ascending=False)
+            else:
+                total_por_partido = fila_u.sum().sort_values(ascending=False)
 
-        if res_m:
-            matriz_reg = pd.concat(res_m).pivot(index='Region', columns='Partido', values='Escaños').fillna(0).astype(int)
-            fila_mult = matriz_reg.sum().to_frame().T
-            fila_mult.index = ['DISTRITO MULTIPLE (30 escaños)']
-        else:
-            matriz_reg = pd.DataFrame()
-            fila_mult = pd.DataFrame()
+            partidos_ord = total_por_partido.index.tolist()
 
-        fila_u = res_u.set_index('Partido')['Escaños'].to_frame().T
-        fila_u.index = ['DISTRITO UNICO (30 escaños)']
+            if not matriz_reg.empty:
+                matriz_reg = matriz_reg.reindex(columns=partidos_ord).fillna(0).astype(int)
+                fila_mult = fila_mult.reindex(columns=partidos_ord).fillna(0).astype(int)
+            fila_u = fila_u.reindex(columns=partidos_ord).fillna(0).astype(int)
 
-        if not fila_mult.empty:
-            total_por_partido = pd.concat([fila_mult, fila_u]).sum().sort_values(ascending=False)
-        else:
-            total_por_partido = fila_u.sum().sort_values(ascending=False)
+            if not matriz_reg.empty:
+                cuadro = pd.concat([matriz_reg, fila_mult, fila_u])
+            else:
+                cuadro = fila_u
 
-        partidos_ord = total_por_partido.index.tolist()
+            cuadro['TOTAL'] = cuadro.sum(axis=1)
 
-        if not matriz_reg.empty:
-            matriz_reg = matriz_reg.reindex(columns=partidos_ord).fillna(0).astype(int)
-            fila_mult = fila_mult.reindex(columns=partidos_ord).fillna(0).astype(int)
-        fila_u = fila_u.reindex(columns=partidos_ord).fillna(0).astype(int)
+            if not fila_mult.empty:
+                cuadro.loc['TOTAL PARTIDO'] = cuadro.loc[['DISTRITO MÚLTIPLE (30 escaños)', 'DISTRITO ÚNICO (30 escaños)']].sum()
+            else:
+                cuadro.loc['TOTAL PARTIDO'] = cuadro.loc['DISTRITO ÚNICO (30 escaños)']
 
-        if not matriz_reg.empty:
-            cuadro = pd.concat([matriz_reg, fila_mult, fila_u])
-        else:
-            cuadro = fila_u
+            total_escaños = int(cuadro.loc['TOTAL PARTIDO', 'TOTAL'])
+            df_candidatos = pd.DataFrame()
 
-        cuadro['TOTAL'] = cuadro.sum(axis=1)
+            del votos_nac_df, sim_u, sim_m, df_sim, res_u, res_m
+            gc.collect()
 
-        if not fila_mult.empty:
-            cuadro.loc['TOTAL PARTIDO'] = cuadro.loc[['DISTRITO MULTIPLE (30 escaños)', 'DISTRITO UNICO (30 escaños)']].sum()
-        else:
-            cuadro.loc['TOTAL PARTIDO'] = cuadro.loc['DISTRITO UNICO (30 escaños)']
+        else:  # andino
+            df_nac = datos.get('nacional', pd.Series())
+            total_validos = df_nac.sum()
 
-        total_escaños = int(cuadro.loc['TOTAL PARTIDO', 'TOTAL'])
-        df_candidatos = pd.DataFrame()
+            umbral = total_validos * 0.05
+            partidos_aptos = df_nac[df_nac >= umbral].index.tolist()
 
-        del votos_nac_df, sim_u, sim_m, df_sim, res_u, res_m
-        gc.collect()
+            df_reparto = df_nac[df_nac.index.isin(partidos_aptos)].reset_index()
+            df_reparto.columns = [COL_PARTIDO, COL_VOTOS]
 
-    else:  # andino
-        df_nac = datos.get('nacional', pd.Series())
-        total_validos = df_nac.sum()
-        partidos_aptos = df_nac[df_nac >= (total_validos * 0.05)].index.tolist()
-        df_reparto = df_nac[df_nac.index.isin(partidos_aptos)].reset_index()
-        df_reparto.columns = [COL_PARTIDO, COL_VOTOS]
+            res = calcular_dhondt(df_reparto, ESCAÑOS_ANDINO, COL_PARTIDO, COL_VOTOS)
+            res = res.sort_values('Escaños', ascending=False)
 
-        res = calcular_dhondt(df_reparto, ESCAÑOS_ANDINO, COL_PARTIDO, COL_VOTOS)
-        res = res.sort_values('Escaños', ascending=False)
+            cuadro = res.set_index('Partido').T
+            cuadro.index = ['ESCAÑOS']
+            cuadro['TOTAL'] = cuadro.sum(axis=1)
 
-        cuadro = res.set_index('Partido').T
-        cuadro.index = ['ESCAÑOS']
-        cuadro['TOTAL'] = cuadro.sum(axis=1)
+            total_escaños = int(cuadro['TOTAL'].iloc[0])
+            total_votos = total_validos
+            df_candidatos = pd.DataFrame()
 
-        total_escaños = int(cuadro['TOTAL'].iloc[0])
-        total_votos = total_validos
-        df_candidatos = pd.DataFrame()
+            del df_nac, df_reparto, res
+            gc.collect()
 
-        del df_nac, df_reparto, res
-        gc.collect()
+        # GUARDAR EN CACHÉ
+        st.session_state.cache_resultados[cache_key] = {
+            'datos': datos,
+            'votos_nac': votos_nac,
+            'archivos_ok': archivos_ok,
+            'archivos_error': archivos_error,
+            'cuadro': cuadro,
+            'total_escaños': total_escaños,
+            'total_votos': total_votos,
+            'partidos_aptos': partidos_aptos,
+            'df_candidatos': df_candidatos
+        }
+        st.session_state.cache_procesado = tipo_eleccion
 
 # ============================================================
 # MOSTRAR RESULTADOS
 # ============================================================
-if 'cuadro' in locals() and datos:
-    c1, c2, c3, c4 = st.columns(4)
-    with c1: st.metric("Total Escaños", total_escaños)
-    with c2: st.metric("Partidos Aptos", len(partidos_aptos))
-    with c3: st.metric("Regiones" if tipo_eleccion == 'diputados' else "Distritos" if tipo_eleccion == 'senado' else "Archivos", len(datos))
-    with c4: st.metric("Votos Válidos", f"{total_votos:,.0f}")
+if 'cuadro' in locals() or (cache_key in st.session_state.cache_resultados):
+    if cache_key in st.session_state.cache_resultados and 'cuadro' not in locals():
+        r = st.session_state.cache_resultados[cache_key]
+        cuadro = r['cuadro']
+        total_escaños = r['total_escaños']
+        total_votos = r['total_votos']
+        partidos_aptos = r['partidos_aptos']
+        df_candidatos = r.get('df_candidatos', pd.DataFrame())
+        votos_nac = r['votos_nac']
+        archivos_ok = r['archivos_ok']
+
+    # CARDS
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.markdown(f'<div class="card"><div class="card-title">Total Escaños</div><div class="card-value">{total_escaños}</div></div>', unsafe_allow_html=True)
+    with col2:
+        st.markdown(f'<div class="card"><div class="card-title">Partidos Aptos</div><div class="card-value">{len(partidos_aptos)}</div></div>', unsafe_allow_html=True)
+    with col3:
+        metric_label = "Regiones" if tipo_eleccion == 'diputados' else "Distritos" if tipo_eleccion == 'senado' else "Archivos"
+        st.markdown(f'<div class="card"><div class="card-title">{metric_label}</div><div class="card-value">{len(datos)}</div></div>', unsafe_allow_html=True)
+    with col4:
+        st.markdown(f'<div class="card"><div class="card-title">Votos Válidos</div><div class="card-value">{total_votos:,.0f}</div></div>', unsafe_allow_html=True)
 
     st.markdown("---")
 
-    # TABS
+    # TABS CON DESCARGAS CSV + IMAGEN
     if tipo_eleccion == 'diputados':
         tab1, tab2, tab3, tab4 = st.tabs(["📊 Escaños por Región", "🏆 Candidatos Electos", "📈 Análisis", "📋 Técnico"])
 
         with tab1:
             st.subheader("Distribución de Escaños")
-            csv_data = cuadro.to_csv().encode('utf-8')
-            st.download_button("⬇️ Descargar CSV", csv_data, "diputados_escaños_2026.csv", "text/csv")
+
+            col_dl1, col_dl2 = st.columns(2)
+            with col_dl1:
+                csv_data = cuadro.to_csv().encode('utf-8')
+                st.download_button("📥 Descargar CSV", csv_data, "diputados_escaños_2026.csv", "text/csv", use_container_width=True)
+            with col_dl2:
+                try:
+                    img_buf = generar_imagen_tabla(cuadro, "Distribución de Escaños - Diputados 2026")
+                    st.download_button("🖼️ Descargar Imagen", img_buf, "diputados_escaños_2026.png", "image/png", use_container_width=True)
+                except Exception as e:
+                    st.error(f"Error generando imagen: {e}")
+
             st.dataframe(cuadro, use_container_width=True, height=600)
             st.bar_chart(cuadro.drop('TOTAL NACIONAL', errors='ignore').drop('TOTAL REGION', axis=1, errors='ignore'), height=500)
 
         with tab2:
             if not df_candidatos.empty:
                 st.subheader(f"Candidatos Electos ({len(df_candidatos)})")
-                df_cand = df_candidatos.sort_values(['Región', 'Votos Preferenciales'], ascending=[True, False]).reset_index(drop=True)
-                df_cand.index = df_cand.index + 1
-                csv_cand = df_cand.to_csv().encode('utf-8')
-                st.download_button("⬇️ Descargar Listado", csv_cand, "diputados_candidatos_2026.csv", "text/csv")
-                st.dataframe(df_cand.style.format({'Votos Preferenciales': '{:,}'}), use_container_width=True, height=600)
+
+                col_dl1, col_dl2 = st.columns(2)
+                with col_dl1:
+                    csv_cand = df_candidatos.to_csv().encode('utf-8')
+                    st.download_button("📥 Descargar CSV", csv_cand, "diputados_candidatos_2026.csv", "text/csv", use_container_width=True)
+                with col_dl2:
+                    try:
+                        img_buf = generar_imagen_tabla(df_candidatos.set_index('Región' if 'Región' in df_candidatos.columns else None), "Candidatos Electos - Diputados 2026")
+                        st.download_button("🖼️ Descargar Imagen", img_buf, "diputados_candidatos_2026.png", "image/png", use_container_width=True)
+                    except Exception as e:
+                        st.error(f"Error generando imagen: {e}")
+
+                st.dataframe(df_candidatos.style.format({'Votos Preferenciales': '{:,}'}), use_container_width=True, height=600)
             else:
                 st.info("No se detectaron candidatos individuales.")
 
@@ -726,7 +867,7 @@ if 'cuadro' in locals() and datos:
         with tab4:
             st.subheader("Resumen Técnico")
             st.markdown(f"""
-            **Metodo:** DHondt  
+            **Método:** DHondt  
             **Valla:** Doble (5% nacional + 7 escaños distritales)  
             **Partidos aptos:** {len(partidos_aptos)}
             """)
@@ -739,8 +880,18 @@ if 'cuadro' in locals() and datos:
 
         with tab1:
             st.subheader("Distribución de Escaños - Senado 2026 (60 total)")
-            csv_data = cuadro.to_csv().encode('utf-8')
-            st.download_button("⬇️ Descargar CSV", csv_data, "senado_escaños_2026.csv", "text/csv")
+
+            col_dl1, col_dl2 = st.columns(2)
+            with col_dl1:
+                csv_data = cuadro.to_csv().encode('utf-8')
+                st.download_button("📥 Descargar CSV", csv_data, "senado_escaños_2026.csv", "text/csv", use_container_width=True)
+            with col_dl2:
+                try:
+                    img_buf = generar_imagen_tabla(cuadro, "Distribución de Escaños - Senado 2026")
+                    st.download_button("🖼️ Descargar Imagen", img_buf, "senado_escaños_2026.png", "image/png", use_container_width=True)
+                except Exception as e:
+                    st.error(f"Error generando imagen: {e}")
+
             st.dataframe(cuadro, use_container_width=True, height=600)
 
         with tab2:
@@ -753,9 +904,9 @@ if 'cuadro' in locals() and datos:
         with tab3:
             st.subheader("Resumen Técnico")
             st.markdown(f"""
-            **Metodo:** DHondt  
-            **Distrito Unico:** {ESCAÑOS_SENADO_UNICO} escaños  
-            **Distrito Multiple:** {ESCAÑOS_SENADO_MULTIPLE} escaños  
+            **Método:** DHondt  
+            **Distrito Único:** {ESCAÑOS_SENADO_UNICO} escaños  
+            **Distrito Múltiple:** {ESCAÑOS_SENADO_MULTIPLE} escaños  
             **Total:** {ESCAÑOS_SENADO_UNICO + ESCAÑOS_SENADO_MULTIPLE} escaños
             """)
             st.subheader("Archivos procesados")
@@ -767,22 +918,19 @@ if 'cuadro' in locals() and datos:
 
         with tab1:
             st.subheader("Distribución - Parlamento Andino 2026")
-            csv_data = cuadro.to_csv().encode('utf-8')
-            st.download_button("⬇️ Descargar CSV", csv_data, "andino_escaños_2026.csv", "text/csv")
+
+            col_dl1, col_dl2 = st.columns(2)
+            with col_dl1:
+                csv_data = cuadro.to_csv().encode('utf-8')
+                st.download_button("📥 Descargar CSV", csv_data, "andino_escaños_2026.csv", "text/csv", use_container_width=True)
+            with col_dl2:
+                try:
+                    img_buf = generar_imagen_tabla(cuadro, "Distribución de Escaños - Parlamento Andino 2026")
+                    st.download_button("🖼️ Descargar Imagen", img_buf, "andino_escaños_2026.png", "image/png", use_container_width=True)
+                except Exception as e:
+                    st.error(f"Error generando imagen: {e}")
+
             st.dataframe(cuadro, use_container_width=True, height=400)
-
-        with tab2:
-            st.subheader("Resumen Técnico")
-            st.markdown(f"""
-            **Metodo:** DHondt  
-            **Escaños:** {ESCAÑOS_ANDINO}  
-            **Valla:** 5% nacional  
-            **Partidos aptos:** {len(partidos_aptos)}
-            """)
-            st.subheader("Archivos procesados")
-            for reg, nom, src in archivos_ok:
-                st.markdown(f"- {nom} ({src})")
-
 
         with tab2:
             st.subheader("Resumen Técnico")
