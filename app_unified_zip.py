@@ -5,6 +5,7 @@ import io
 import zipfile
 import os
 import gc
+import glob
 from pathlib import Path
 
 # ============================================================
@@ -29,6 +30,7 @@ st.markdown("""
     .badge-senado { background: #D91023; color: white; }
     .badge-andino { background: #28a745; color: white; }
     .info-box { background-color: #f8f9fa; border-left: 4px solid #D91023; padding: 1rem; margin: 1rem 0; border-radius: 0 8px 8px 0; }
+    .warning-box { background-color: #fff3cd; border-left: 4px solid #ffc107; padding: 1rem; margin: 1rem 0; border-radius: 0 8px 8px 0; }
     .success-box { background-color: #e8f8e8; border-left: 4px solid #28a745; padding: 1rem; margin: 1rem 0; border-radius: 0 8px 8px 0; }
     .stTabs [data-baseweb="tab-list"] { gap: 8px; }
     .stTabs [data-baseweb="tab"] { background-color: #f0f2f6; border-radius: 4px 4px 0 0; padding: 10px 20px; font-weight: 600; }
@@ -68,24 +70,31 @@ COL_PARTIDO = 'ORGANIZACION POLÍTICA'
 COL_VOTOS = 'CANTIDAD DE VOTOS'
 
 # ============================================================
-# RUTAS DE ARCHIVOS PRECARGADOS (configura según tu repo)
+# PATRONES DE DETECCIÓN AUTOMÁTICA (genéricos, sin fecha/hora)
 # ============================================================
-# Estas rutas son relativas al directorio de la app en Streamlit Cloud
-RUTAS_PRECARGADAS = {
+PATRONES_DETECCION = {
     'diputados': {
-        'zip': 'data/diputados_2026.zip',  # Ruta relativa en el repo
-        'descripcion': 'Diputados - 130 escaños (27 regiones)'
+        'patron_zip': 'PR-ESP_Diputados_*.zip',
+        'patron_carpeta': 'PR-ESP_Diputados_*',
+        'tipo': 'zip',
+        'descripcion': 'Diputados - 130 escaños'
     },
     'senado_unico': {
-        'zip': 'data/senado_unico_2026.zip',
+        'patron_zip': 'PR-ESP_Senadores*Unico*.zip',
+        'patron_carpeta': 'PR-ESP_Senadores*Unico*',
+        'tipo': 'zip',
         'descripcion': 'Senado Distrito Unico - 30 escaños'
     },
     'senado_multiple': {
-        'zip': 'data/senado_multiple_2026.zip',
-        'descripcion': 'Senado Distrito Multiple - 30 escaños (regiones)'
+        'patron_zip': 'PR-ESP_Senadores*Multiple*.zip',
+        'patron_carpeta': 'PR-ESP_Senadores*Multiple*',
+        'tipo': 'zip',
+        'descripcion': 'Senado Distrito Multiple - 30 escaños'
     },
     'andino': {
-        'zip': 'data/andino_2026.zip',
+        'patron_zip': 'PR-ESP_Parlamento*Andino*.zip',
+        'patron_carpeta': 'PR-ESP_Parlamento*Andino*',
+        'tipo': 'zip',
         'descripcion': 'Parlamento Andino - 5 escaños'
     }
 }
@@ -133,9 +142,7 @@ def extraer_csvs_de_zip_path(zip_path):
     csv_files = []
     try:
         if not os.path.exists(zip_path):
-            st.error(f"Archivo no encontrado: {zip_path}")
             return csv_files
-
         with zipfile.ZipFile(zip_path) as z:
             for name in z.namelist():
                 if name.lower().endswith('.csv') and not name.startswith('__') and not name.startswith('.'):
@@ -150,6 +157,72 @@ def extraer_csvs_de_zip_path(zip_path):
         st.error(f"Error leyendo {zip_path}: {str(e)}")
     return csv_files
 
+def extraer_csvs_de_carpeta(carpeta_path):
+    """Extrae CSVs desde una carpeta local"""
+    csv_files = []
+    try:
+        if not os.path.exists(carpeta_path):
+            return csv_files
+        for archivo in os.listdir(carpeta_path):
+            if archivo.lower().endswith('.csv'):
+                ruta_completa = os.path.join(carpeta_path, archivo)
+                with open(ruta_completa, 'rb') as f:
+                    content = f.read()
+                    csv_files.append({
+                        'name': archivo,
+                        'content': io.BytesIO(content),
+                        'source': f"Carpeta: {os.path.basename(carpeta_path)}"
+                    })
+    except Exception as e:
+        st.error(f"Error leyendo carpeta {carpeta_path}: {str(e)}")
+    return csv_files
+
+def detectar_archivos_locales(tipo_eleccion):
+    """Detecta archivos locales usando patrones genéricos"""
+    archivos_encontrados = {}
+
+    # Buscar en directorio actual y subdirectorios comunes
+    directorios_busqueda = ['.', 'data', 'archivos', 'input', 'PR-ESP']
+
+    if tipo_eleccion == 'diputados':
+        patrones = ['diputados']
+    elif tipo_eleccion == 'senado':
+        patrones = ['senado_unico', 'senado_multiple']
+    else:  # andino
+        patrones = ['andino']
+
+    for patron_key in patrones:
+        info = PATRONES_DETECCION[patron_key]
+        encontrado = False
+
+        for directorio in directorios_busqueda:
+            if not os.path.exists(directorio):
+                continue
+
+            # Buscar ZIP
+            zip_pattern = os.path.join(directorio, info['patron_zip'])
+            zip_matches = glob.glob(zip_pattern)
+            if zip_matches:
+                # Tomar el más reciente si hay varios
+                zip_path = max(zip_matches, key=os.path.getmtime)
+                archivos_encontrados[patron_key] = {'tipo': 'zip', 'ruta': zip_path}
+                encontrado = True
+                break
+
+            # Buscar carpeta
+            carpeta_pattern = os.path.join(directorio, info['patron_carpeta'])
+            carpeta_matches = glob.glob(carpeta_pattern)
+            if carpeta_matches:
+                carpeta_path = max(carpeta_matches, key=os.path.getmtime)
+                archivos_encontrados[patron_key] = {'tipo': 'carpeta', 'ruta': carpeta_path}
+                encontrado = True
+                break
+
+        if not encontrado:
+            archivos_encontrados[patron_key] = None
+
+    return archivos_encontrados
+
 def procesar_csvs(csv_list, tipo_eleccion):
     """Procesa lista de CSVs según el tipo de elección"""
     datos = {}
@@ -162,8 +235,7 @@ def procesar_csvs(csv_list, tipo_eleccion):
         distrito = csv_info.get('distrito', 'auto')
         try:
             csv_info['content'].seek(0)
-            # Leer solo columnas necesarias
-            df = pd.read_csv(csv_info['content'], low_memory=False, dtype=str, 
+            df = pd.read_csv(csv_info['content'], low_memory=False, dtype=str,
                            usecols=lambda col: col in [COL_PARTIDO, COL_VOTOS] or col.isdigit() or 'CANDIDATO' in col.upper())
             df.columns = df.columns.str.strip()
 
@@ -171,11 +243,9 @@ def procesar_csvs(csv_list, tipo_eleccion):
                 archivos_error.append(f"{nombre}: Columnas requeridas no encontradas")
                 continue
 
-            # Procesar solo columnas necesarias
             df = df[[COL_PARTIDO, COL_VOTOS]].copy()
             df[COL_VOTOS] = pd.to_numeric(df[COL_VOTOS], errors='coerce').fillna(0)
 
-            # Agregar a datos acumulados (sin crear copias)
             if tipo_eleccion == 'diputados':
                 region = detectar_region(nombre, ESCAÑOS_DIPUTADOS_2026)
                 if region and region in ESCAÑOS_DIPUTADOS_2026:
@@ -232,14 +302,12 @@ def procesar_csvs(csv_list, tipo_eleccion):
                 votos_nacionales.append(df.groupby(COL_PARTIDO)[COL_VOTOS].sum())
                 archivos_ok.append(('NACIONAL', nombre, csv_info.get('source', 'individual')))
 
-            # Liberar memoria INMEDIATAMENTE
             del df
             gc.collect()
 
         except Exception as e:
             archivos_error.append(f"{nombre}: {str(e)}")
 
-    # Consolidar para Andino
     if tipo_eleccion == 'andino' and votos_nacionales:
         datos['nacional'] = pd.concat(votos_nacionales).groupby(level=0).sum()
 
@@ -259,17 +327,39 @@ with st.sidebar:
         format_func=lambda x: x[1], index=0)[0]
 
     st.markdown("---")
-    st.subheader("📁 Configuración de Precarga")
+    st.subheader("📁 Modo de Carga")
 
-    # Mostrar estado de archivos precargados
-    st.markdown("**Archivos en el repositorio:**")
-    for key, info in RUTAS_PRECARGADAS.items():
-        existe = os.path.exists(info['zip'])
-        icon = "✅" if existe else "❌"
-        st.markdown(f"{icon} `{info['zip']}`")
+    # Detectar archivos locales automáticamente
+    archivos_locales = detectar_archivos_locales(tipo_eleccion)
+    hay_locales = any(v is not None for v in archivos_locales.values())
+
+    if hay_locales:
+        st.markdown("""
+        <div class="success-box">
+        <b>✅ Archivos locales detectados</b><br>
+        Se usarán automáticamente los archivos del repositorio.
+        </div>
+        """, unsafe_allow_html=True)
+        modo_carga = 'auto'
+    else:
+        st.markdown("""
+        <div class="warning-box">
+        <b>⚠️ No se detectaron archivos locales</b><br>
+        Sube los archivos manualmente o verifica las rutas.
+        </div>
+        """, unsafe_allow_html=True)
+        modo_carga = 'manual'
+
+    # Opción manual siempre disponible
+    with st.expander("📤 Carga Manual (opcional)", expanded=not hay_locales):
+        if tipo_eleccion == 'senado':
+            uploaded_zip_unico = st.file_uploader("ZIP/RAR Distrito Unico", type=["zip", "rar"], key=f"manual_unico_{tipo_eleccion}")
+            uploaded_zip_multiple = st.file_uploader("ZIP/RAR Distrito Multiple", type=["zip", "rar"], key=f"manual_multiple_{tipo_eleccion}")
+        else:
+            uploaded_zip = st.file_uploader("ZIP con CSVs", type=["zip", "rar"], key=f"manual_zip_{tipo_eleccion}")
 
     st.markdown("---")
-    st.caption("v7.0 - Precarga desde repositorio")
+    st.caption("v8.0 - Detección automática + Carga manual")
 
 # ============================================================
 # HEADER
@@ -284,66 +374,96 @@ else:
     st.markdown('<div class="sub-header"><span class="election-badge badge-andino">🌎 PARLAMENTO ANDINO</span> 5 Escaños · Circunscripción Única</div>', unsafe_allow_html=True)
 
 # ============================================================
-# CARGA AUTOMÁTICA DE ARCHIVOS PRECARGADOS
+# CARGA DE ARCHIVOS (AUTO O MANUAL)
 # ============================================================
-if tipo_eleccion == 'senado':
-    # Senado necesita 2 archivos
-    zip_unico = RUTAS_PRECARGADAS['senado_unico']['zip']
-    zip_multiple = RUTAS_PRECARGADAS['senado_multiple']['zip']
+todos_csvs = []
 
-    if not os.path.exists(zip_unico) or not os.path.exists(zip_multiple):
-        st.error("❌ Archivos precargados no encontrados. Verifica las rutas en el repositorio.")
-        st.info("""
-        **Estructura esperada en tu repo:**
-        ```
-        tu-repo/
-        ├── app.py
-        └── data/
-            ├── senado_unico_2026.zip
-            └── senado_multiple_2026.zip
-        ```
-        """)
-        st.stop()
+# 1. INTENTAR CARGA AUTOMÁTICA
+if modo_carga == 'auto':
+    st.info("🔍 Buscando archivos locales...")
 
-    st.info("📦 Cargando archivos precargados del Senado...")
-    csvs_unico = extraer_csvs_de_zip_path(zip_unico)
-    for c in csvs_unico: c['distrito'] = 'unico'
+    if tipo_eleccion == 'senado':
+        # Senado: 2 archivos
+        unico_info = archivos_locales.get('senado_unico')
+        multiple_info = archivos_locales.get('senado_multiple')
 
-    csvs_multiple = extraer_csvs_de_zip_path(zip_multiple)
-    for c in csvs_multiple: c['distrito'] = 'multiple'
+        if unico_info:
+            if unico_info['tipo'] == 'zip':
+                csvs = extraer_csvs_de_zip_path(unico_info['ruta'])
+            else:
+                csvs = extraer_csvs_de_carpeta(unico_info['ruta'])
+            for c in csvs: c['distrito'] = 'unico'
+            todos_csvs.extend(csvs)
+            st.success(f"✅ Distrito Unico cargado: `{os.path.basename(unico_info['ruta'])}`")
 
-    todos_csvs = csvs_unico + csvs_multiple
+        if multiple_info:
+            if multiple_info['tipo'] == 'zip':
+                csvs = extraer_csvs_de_zip_path(multiple_info['ruta'])
+            else:
+                csvs = extraer_csvs_de_carpeta(multiple_info['ruta'])
+            for c in csvs: c['distrito'] = 'multiple'
+            todos_csvs.extend(csvs)
+            st.success(f"✅ Distrito Multiple cargado: `{os.path.basename(multiple_info['ruta'])}`")
+    else:
+        # Diputados o Andino: 1 archivo
+        clave = 'diputados' if tipo_eleccion == 'diputados' else 'andino'
+        info = archivos_locales.get(clave)
 
-else:
-    # Diputados o Andino - 1 archivo
-    zip_key = 'diputados' if tipo_eleccion == 'diputados' else 'andino'
-    zip_path = RUTAS_PRECARGADAS[zip_key]['zip']
+        if info:
+            if info['tipo'] == 'zip':
+                todos_csvs = extraer_csvs_de_zip_path(info['ruta'])
+            else:
+                todos_csvs = extraer_csvs_de_carpeta(info['ruta'])
+            st.success(f"✅ Archivo cargado: `{os.path.basename(info['ruta'])}`")
 
-    if not os.path.exists(zip_path):
-        st.error(f"❌ Archivo precargado no encontrado: `{zip_path}`")
-        st.info("""
-        **Estructura esperada en tu repo:**
-        ```
-        tu-repo/
-        ├── app.py
-        └── data/
-            └── diputados_2026.zip  (o andino_2026.zip)
-        ```
-        """)
-        st.stop()
+# 2. SI NO HAY LOCALES, USAR MANUAL
+if not todos_csvs:
+    st.warning("⚠️ No se encontraron archivos locales. Usando carga manual...")
 
-    st.info(f"📦 Cargando archivo precargado: `{zip_path}`...")
-    todos_csvs = extraer_csvs_de_zip_path(zip_path)
+    if tipo_eleccion == 'senado':
+        if 'uploaded_zip_unico' in locals() and uploaded_zip_unico:
+            if uploaded_zip_unico.name.lower().endswith('.zip'):
+                import zipfile
+                with zipfile.ZipFile(uploaded_zip_unico) as z:
+                    for name in z.namelist():
+                        if name.lower().endswith('.csv'):
+                            with z.open(name) as f:
+                                todos_csvs.append({'name': os.path.basename(name), 'content': io.BytesIO(f.read()), 'distrito': 'unico', 'source': 'manual'})
+        if 'uploaded_zip_multiple' in locals() and uploaded_zip_multiple:
+            if uploaded_zip_multiple.name.lower().endswith('.zip'):
+                import zipfile
+                with zipfile.ZipFile(uploaded_zip_multiple) as z:
+                    for name in z.namelist():
+                        if name.lower().endswith('.csv'):
+                            with z.open(name) as f:
+                                todos_csvs.append({'name': os.path.basename(name), 'content': io.BytesIO(f.read()), 'distrito': 'multiple', 'source': 'manual'})
+    else:
+        if 'uploaded_zip' in locals() and uploaded_zip:
+            if uploaded_zip.name.lower().endswith('.zip'):
+                import zipfile
+                with zipfile.ZipFile(uploaded_zip) as z:
+                    for name in z.namelist():
+                        if name.lower().endswith('.csv'):
+                            with z.open(name) as f:
+                                todos_csvs.append({'name': os.path.basename(name), 'content': io.BytesIO(f.read()), 'source': 'manual'})
 
-# Mostrar archivos cargados
-if todos_csvs:
-    st.success(f"✅ {len(todos_csvs)} archivos CSV cargados desde ZIP precargado")
-    with st.expander(f"📂 Archivos cargados ({len(todos_csvs)})"):
-        for c in todos_csvs:
-            st.markdown(f"• {c['name']}")
-else:
-    st.error("No se pudieron cargar archivos del ZIP precargado.")
+# Verificar que tenemos archivos
+if not todos_csvs:
+    st.error("""
+    ❌ No se encontraron archivos para procesar.
+
+    **Opciones:**
+    1. **Precarga automática:** Coloca los archivos en el repositorio con estos patrones:
+       - Diputados: `PR-ESP_Diputados_*.zip`
+       - Senado Unico: `PR-ESP_Senadores*Unico*.zip`
+       - Senado Multiple: `PR-ESP_Senadores*Multiple*.zip`
+       - Andino: `PR-ESP_Parlamento*Andino*.zip`
+
+    2. **Carga manual:** Usa el panel lateral para subir archivos ZIP.
+    """)
     st.stop()
+
+st.success(f"📦 Total de CSVs listos para procesar: {len(todos_csvs)}")
 
 # ============================================================
 # PROCESAMIENTO AUTOMÁTICO
@@ -367,13 +487,11 @@ with st.spinner("⏳ Procesando elecciones..."):
     # =====================================================
 
     if tipo_eleccion == 'diputados':
-        # Valla doble
         df_nacional = pd.concat(votos_nac).groupby(level=0).sum().reset_index()
         df_nacional.columns = [COL_PARTIDO, COL_VOTOS]
         total_votos = df_nacional[COL_VOTOS].sum()
         pasan_5 = df_nacional[df_nacional[COL_VOTOS] >= (total_votos * 0.05)][COL_PARTIDO].tolist()
 
-        # Simulación para valla 7
         escaños_sim = []
         for region, series in datos.items():
             n = ESCAÑOS_DIPUTADOS_2026.get(region, 0)
@@ -386,7 +504,6 @@ with st.spinner("⏳ Procesando elecciones..."):
         pasan_7 = df_sim[df_sim['Escaños'] >= 7]['Partido'].tolist()
         partidos_aptos = list(set(pasan_5) & set(pasan_7))
 
-        # Reparto final
         resultados = []
         for region, series in datos.items():
             n_esc = ESCAÑOS_DIPUTADOS_2026.get(region, 0)
@@ -552,7 +669,7 @@ with st.spinner("⏳ Procesando elecciones..."):
         gc.collect()
 
 # ============================================================
-# MOSTRAR RESULTADOS (SIEMPRE VISIBLE)
+# MOSTRAR RESULTADOS
 # ============================================================
 if 'cuadro' in locals() and datos:
     c1, c2, c3, c4 = st.columns(4)
