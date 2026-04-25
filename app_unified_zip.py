@@ -5,6 +5,7 @@ import io
 import zipfile
 import os
 import gc
+import numpy as np
 
 # ============================================================
 # CONFIGURACIÓN DE PÁGINA
@@ -67,7 +68,7 @@ COL_PARTIDO = 'ORGANIZACION POLÍTICA'
 COL_VOTOS = 'CANTIDAD DE VOTOS'
 
 # ============================================================
-# FUNCIONES UTILITARIAS
+# FUNCIONES UTILITARIAS (OPTIMIZADAS)
 # ============================================================
 def eliminar_tildes(texto):
     if not isinstance(texto, str): return texto
@@ -75,21 +76,27 @@ def eliminar_tildes(texto):
     return texto.encode('ascii', 'ignore').decode("utf-8").upper()
 
 def calcular_dhondt(df_votos, num_escaños, col_partido, col_votos):
+    """Calcula reparto DHondt"""
     if num_escaños <= 0 or df_votos.empty:
         return pd.DataFrame(columns=['Partido', 'Escaños'])
+
     df_votos = df_votos.copy()
     df_votos[col_votos] = pd.to_numeric(df_votos[col_votos], errors='coerce').fillna(0)
+
     listado_cocientes = []
     for i in range(1, num_escaños + 1):
         temp = df_votos[[col_partido, col_votos]].copy()
         temp['cociente'] = temp[col_votos] / i
         listado_cocientes.append(temp)
+
     df_cocientes = pd.concat(listado_cocientes)
     top_escaños = df_cocientes.nlargest(num_escaños, 'cociente')
     res = top_escaños[col_partido].value_counts().reset_index()
     res.columns = ['Partido', 'Escaños']
+
     del df_cocientes, top_escaños, listado_cocientes
     gc.collect()
+
     return res
 
 def detectar_region(nombre_archivo, diccionario_regiones):
@@ -112,7 +119,7 @@ def extraer_csvs_de_zip(uploaded_zip):
                 if name.lower().endswith('.csv') and not name.startswith('__') and not name.startswith('.'):
                     with z.open(name) as f:
                         content = f.read()
-                        csv_files.append({'name': os.path.basename(name), 'content': io.BytesIO(content), 'full_name': name})
+                        csv_files.append({'name': os.path.basename(name), 'content': io.BytesIO(content)})
     except Exception as e:
         st.error(f"Error leyendo ZIP: {str(e)}")
     return csv_files
@@ -126,7 +133,7 @@ def extraer_csvs_de_rar(uploaded_rar):
                 if name.lower().endswith('.csv') and not name.startswith('__') and not name.startswith('.'):
                     with rf.open(name) as f:
                         content = f.read()
-                        csv_files.append({'name': os.path.basename(name), 'content': io.BytesIO(content), 'full_name': name})
+                        csv_files.append({'name': os.path.basename(name), 'content': io.BytesIO(content)})
     except ImportError:
         st.error("Para archivos RAR necesitas: pip install rarfile")
     except Exception as e:
@@ -160,7 +167,7 @@ with st.sidebar:
         <div class="warning-box">
         <b>SENADO requiere 2 archivos separados:</b><br>
         1. <b>Distrito Unico</b> (30 escaños)<br>
-        2. <b>Distrito Multiple</b> (30 escaños - regiones)
+        2. <b>Distrito Multiple</b> (30 escaños)
         </div>
         """, unsafe_allow_html=True)
 
@@ -190,10 +197,8 @@ with st.sidebar:
         st.markdown("""
         <div class="info-box">
         <b>🏛️ DIPUTADOS</b><br>
-        • 130 escaños<br>
-        • Doble valla: 5% nacional + 7 escaños distritales<br>
-        • Metodo DHondt por región<br><br>
-        <b>📦 Formato ZIP esperado:</b><br>
+        • 130 escaños · Doble valla · DHondt<br><br>
+        <b>📦 Formato ZIP:</b><br>
         PR-ESP_Diputados_2026_AMAZONAS.csv<br>
         ... (27 archivos)
         </div>
@@ -201,27 +206,23 @@ with st.sidebar:
     elif tipo_eleccion == 'senado':
         st.markdown("""
         <div class="info-box">
-        <b>⚖️ SENADO - 60 ESCAÑOS TOTAL</b><br>
-        • <b>Distrito Unico:</b> 30 escaños (nacional)<br>
-        • <b>Distrito Multiple:</b> 30 escaños (26 regiones + Residentes)<br>
-        • Valla: 5% nacional + 3 escaños<br><br>
-        <b>📦 Archivos requeridos:</b><br>
-        1. <b>ZIP/RAR Distrito Unico</b><br>
-        2. <b>ZIP/RAR Distrito Multiple</b>
+        <b>⚖️ SENADO - 60 ESCAÑOS</b><br>
+        • Distrito Unico: 30 escaños<br>
+        • Distrito Multiple: 30 escaños<br><br>
+        <b>📦 2 archivos requeridos</b>
         </div>
         """, unsafe_allow_html=True)
     else:
         st.markdown("""
         <div class="info-box">
         <b>🌎 PARLAMENTO ANDINO</b><br>
-        • 5 escaños<br>
-        • Valla simple: 5% nacional<br>
-        • Circunscripción única
+        • 5 escaños · Valla 5%<br><br>
+        <b>📦 1 ZIP con todos los CSVs</b>
         </div>
         """, unsafe_allow_html=True)
 
     st.markdown("---")
-    st.caption("v5.0 - Simulador Integral 2026 · Optimizado para memoria")
+    st.caption("v6.0 - Optimizado para memoria")
 
 # ============================================================
 # HEADER
@@ -245,28 +246,111 @@ def obtener_csvs(uploaded_files, uploaded_zip, uploaded_rar, uploaded_zip_unico=
             content = f.read()
             todos_csvs.append({'name': f.name, 'content': io.BytesIO(content), 'source': 'individual'})
     if uploaded_zip:
-        zip_csvs = extraer_csvs_de_zip(uploaded_zip)
-        for c in zip_csvs: c['source'] = f"ZIP: {uploaded_zip.name}"
-        todos_csvs.extend(zip_csvs)
+        for c in extraer_csvs_de_zip(uploaded_zip): c['source'] = f"ZIP: {uploaded_zip.name}"; todos_csvs.append(c)
     if uploaded_rar:
-        rar_csvs = extraer_csvs_de_rar(uploaded_rar)
-        for c in rar_csvs: c['source'] = f"RAR: {uploaded_rar.name}"
-        todos_csvs.extend(rar_csvs)
+        for c in extraer_csvs_de_rar(uploaded_rar): c['source'] = f"RAR: {uploaded_rar.name}"; todos_csvs.append(c)
     if uploaded_zip_unico:
         if uploaded_zip_unico.name.lower().endswith('.zip'):
-            csvs = extraer_csvs_de_zip(uploaded_zip_unico)
+            for c in extraer_csvs_de_zip(uploaded_zip_unico): c['source'] = f"UNICO"; c['distrito'] = 'unico'; todos_csvs.append(c)
         else:
-            csvs = extraer_csvs_de_rar(uploaded_zip_unico)
-        for c in csvs: c['source'] = f"UNICO: {uploaded_zip_unico.name}"; c['distrito'] = 'unico'
-        todos_csvs.extend(csvs)
+            for c in extraer_csvs_de_rar(uploaded_zip_unico): c['source'] = f"UNICO"; c['distrito'] = 'unico'; todos_csvs.append(c)
     if uploaded_zip_multiple:
         if uploaded_zip_multiple.name.lower().endswith('.zip'):
-            csvs = extraer_csvs_de_zip(uploaded_zip_multiple)
+            for c in extraer_csvs_de_zip(uploaded_zip_multiple): c['source'] = f"MULTIPLE"; c['distrito'] = 'multiple'; todos_csvs.append(c)
         else:
-            csvs = extraer_csvs_de_rar(uploaded_zip_multiple)
-        for c in csvs: c['source'] = f"MULTIPLE: {uploaded_zip_multiple.name}"; c['distrito'] = 'multiple'
-        todos_csvs.extend(csvs)
+            for c in extraer_csvs_de_rar(uploaded_zip_multiple): c['source'] = f"MULTIPLE"; c['distrito'] = 'multiple'; todos_csvs.append(c)
     return todos_csvs
+
+
+def procesar_csvs(csv_list, tipo_eleccion):
+    """Procesa lista de CSVs según el tipo de elección"""
+    datos = {}
+    votos_nacionales = []
+    archivos_ok = []
+    archivos_error = []
+
+    for csv_info in csv_list:
+        nombre = csv_info['name']
+        distrito = csv_info.get('distrito', 'auto')
+        try:
+            csv_info['content'].seek(0)
+            df = pd.read_csv(csv_info['content'], low_memory=False, dtype=str, usecols=lambda col: col in [COL_PARTIDO, COL_VOTOS] or col.isdigit() or 'CANDIDATO' in col.upper())
+            df.columns = df.columns.str.strip()
+
+            if COL_PARTIDO not in df.columns or COL_VOTOS not in df.columns:
+                archivos_error.append(f"{nombre}: Columnas requeridas no encontradas")
+                continue
+
+            df = df[[COL_PARTIDO, COL_VOTOS]].copy()
+            df[COL_VOTOS] = pd.to_numeric(df[COL_VOTOS], errors='coerce').fillna(0)
+
+            if tipo_eleccion == 'diputados':
+                region = detectar_region(nombre, ESCAÑOS_DIPUTADOS_2026)
+                if region and region in ESCAÑOS_DIPUTADOS_2026:
+                    if region not in datos:
+                        datos[region] = df.groupby(COL_PARTIDO)[COL_VOTOS].sum()
+                    else:
+                        datos[region] = datos[region].add(df.groupby(COL_PARTIDO)[COL_VOTOS].sum(), fill_value=0)
+                    votos_nacionales.append(df.groupby(COL_PARTIDO)[COL_VOTOS].sum())
+                    archivos_ok.append((region, nombre, csv_info.get('source', 'individual')))
+                else:
+                    archivos_error.append(f"{nombre}: Region no detectada")
+
+            elif tipo_eleccion == 'senado':
+                if distrito == 'unico':
+                    if 'unico' not in datos:
+                        datos['unico'] = df.groupby(COL_PARTIDO)[COL_VOTOS].sum()
+                    else:
+                        datos['unico'] = datos['unico'].add(df.groupby(COL_PARTIDO)[COL_VOTOS].sum(), fill_value=0)
+                    votos_nacionales.append(df.groupby(COL_PARTIDO)[COL_VOTOS].sum())
+                    archivos_ok.append(('DISTRITO UNICO', nombre, csv_info.get('source', 'individual')))
+                elif distrito == 'multiple':
+                    region = detectar_region(nombre, REGLA_MULTIPLE_SENADO)
+                    if region and region in REGLA_MULTIPLE_SENADO:
+                        if region not in datos:
+                            datos[region] = df.groupby(COL_PARTIDO)[COL_VOTOS].sum()
+                        else:
+                            datos[region] = datos[region].add(df.groupby(COL_PARTIDO)[COL_VOTOS].sum(), fill_value=0)
+                        votos_nacionales.append(df.groupby(COL_PARTIDO)[COL_VOTOS].sum())
+                        archivos_ok.append((region, nombre, csv_info.get('source', 'individual')))
+                    else:
+                        archivos_error.append(f"{nombre}: Region no detectada")
+                else:
+                    nombre_norm = eliminar_tildes(nombre)
+                    if 'UNICO' in nombre_norm or 'UNICO' in nombre_norm:
+                        if 'unico' not in datos:
+                            datos['unico'] = df.groupby(COL_PARTIDO)[COL_VOTOS].sum()
+                        else:
+                            datos['unico'] = datos['unico'].add(df.groupby(COL_PARTIDO)[COL_VOTOS].sum(), fill_value=0)
+                        votos_nacionales.append(df.groupby(COL_PARTIDO)[COL_VOTOS].sum())
+                        archivos_ok.append(('DISTRITO UNICO', nombre, csv_info.get('source', 'individual')))
+                    else:
+                        region = detectar_region(nombre, REGLA_MULTIPLE_SENADO)
+                        if region and region in REGLA_MULTIPLE_SENADO:
+                            if region not in datos:
+                                datos[region] = df.groupby(COL_PARTIDO)[COL_VOTOS].sum()
+                            else:
+                                datos[region] = datos[region].add(df.groupby(COL_PARTIDO)[COL_VOTOS].sum(), fill_value=0)
+                            votos_nacionales.append(df.groupby(COL_PARTIDO)[COL_VOTOS].sum())
+                            archivos_ok.append((region, nombre, csv_info.get('source', 'individual')))
+                        else:
+                            archivos_error.append(f"{nombre}: Distrito no detectado")
+
+            elif tipo_eleccion == 'andino':
+                votos_nacionales.append(df.groupby(COL_PARTIDO)[COL_VOTOS].sum())
+                archivos_ok.append(('NACIONAL', nombre, csv_info.get('source', 'individual')))
+
+            del df
+            gc.collect()
+
+        except Exception as e:
+            archivos_error.append(f"{nombre}: {str(e)}")
+
+    if tipo_eleccion == 'andino' and votos_nacionales:
+        datos['nacional'] = pd.concat(votos_nacionales).groupby(level=0).sum()
+
+    return datos, votos_nacionales, archivos_ok, archivos_error
+
 
 if tipo_eleccion == 'senado':
     todos_csvs = obtener_csvs([], None, None, uploaded_zip_unico, uploaded_zip_multiple)
@@ -296,7 +380,7 @@ if procesar and todos_csvs:
     status_text = st.empty()
 
     # =====================================================
-    # PROCESAMIENTO POR LOTES (optimizado para memoria)
+    # PROCESAMIENTO POR LOTES (OPTIMIZADO)
     # =====================================================
     datos = {}
     votos_nacionales = []
@@ -314,84 +398,77 @@ if procesar and todos_csvs:
 
         try:
             csv_info['content'].seek(0)
-            # Leer CSV con optimización de memoria
-            df = pd.read_csv(csv_info['content'], low_memory=False, dtype=str)
+            # Leer solo columnas necesarias para ahorrar memoria
+            df = pd.read_csv(csv_info['content'], low_memory=False, dtype=str, usecols=lambda col: col in [COL_PARTIDO, COL_VOTOS] or col.isdigit() or 'CANDIDATO' in col.upper())
             df.columns = df.columns.str.strip()
 
             if COL_PARTIDO not in df.columns or COL_VOTOS not in df.columns:
                 archivos_error.append(f"{nombre}: Columnas requeridas no encontradas")
                 continue
 
-            # Convertir votos a numérico
+            # Procesar solo columnas necesarias
+            df = df[[COL_PARTIDO, COL_VOTOS]].copy()
             df[COL_VOTOS] = pd.to_numeric(df[COL_VOTOS], errors='coerce').fillna(0)
 
-            # Agrupar y liberar memoria del dataframe original
-            df_agrupado = df.groupby(COL_PARTIDO)[COL_VOTOS].sum().reset_index()
-            del df
-            gc.collect()
-
-            df_valido = df_agrupado[~df_agrupado[COL_PARTIDO].isin(EXCLUIR)].copy()
-            del df_agrupado
-            gc.collect()
-
+            # Agregar a datos acumulados (sin crear copias)
             if tipo_eleccion == 'diputados':
                 region = detectar_region(nombre, ESCAÑOS_DIPUTADOS_2026)
                 if region and region in ESCAÑOS_DIPUTADOS_2026:
-                    if region in datos:
-                        datos[region] = pd.concat([datos[region], df_valido]).groupby(COL_PARTIDO)[COL_VOTOS].sum().reset_index()
+                    if region not in datos:
+                        datos[region] = df.groupby(COL_PARTIDO)[COL_VOTOS].sum()
                     else:
-                        datos[region] = df_valido
-                    votos_nacionales.append(df_valido.copy())
+                        datos[region] = datos[region].add(df.groupby(COL_PARTIDO)[COL_VOTOS].sum(), fill_value=0)
+                    votos_nacionales.append(df.groupby(COL_PARTIDO)[COL_VOTOS].sum())
                     archivos_ok.append((region, nombre, csv_info.get('source', 'individual')))
                 else:
                     archivos_error.append(f"{nombre}: Region no detectada")
 
             elif tipo_eleccion == 'senado':
                 if distrito == 'unico':
-                    if 'unico' in datos:
-                        datos['unico'] = pd.concat([datos['unico'], df_valido]).groupby(COL_PARTIDO)[COL_VOTOS].sum().reset_index()
+                    if 'unico' not in datos:
+                        datos['unico'] = df.groupby(COL_PARTIDO)[COL_VOTOS].sum()
                     else:
-                        datos['unico'] = df_valido
-                    votos_nacionales.append(df_valido.copy())
+                        datos['unico'] = datos['unico'].add(df.groupby(COL_PARTIDO)[COL_VOTOS].sum(), fill_value=0)
+                    votos_nacionales.append(df.groupby(COL_PARTIDO)[COL_VOTOS].sum())
                     archivos_ok.append(('DISTRITO UNICO', nombre, csv_info.get('source', 'individual')))
                 elif distrito == 'multiple':
                     region = detectar_region(nombre, REGLA_MULTIPLE_SENADO)
                     if region and region in REGLA_MULTIPLE_SENADO:
-                        if region in datos:
-                            datos[region] = pd.concat([datos[region], df_valido]).groupby(COL_PARTIDO)[COL_VOTOS].sum().reset_index()
+                        if region not in datos:
+                            datos[region] = df.groupby(COL_PARTIDO)[COL_VOTOS].sum()
                         else:
-                            datos[region] = df_valido
-                        votos_nacionales.append(df_valido.copy())
+                            datos[region] = datos[region].add(df.groupby(COL_PARTIDO)[COL_VOTOS].sum(), fill_value=0)
+                        votos_nacionales.append(df.groupby(COL_PARTIDO)[COL_VOTOS].sum())
                         archivos_ok.append((region, nombre, csv_info.get('source', 'individual')))
                     else:
-                        archivos_error.append(f"{nombre}: Region del distrito multiple no detectada")
+                        archivos_error.append(f"{nombre}: Region no detectada")
                 else:
                     nombre_norm = eliminar_tildes(nombre)
                     if 'UNICO' in nombre_norm or 'UNICO' in nombre_norm:
-                        if 'unico' in datos:
-                            datos['unico'] = pd.concat([datos['unico'], df_valido]).groupby(COL_PARTIDO)[COL_VOTOS].sum().reset_index()
+                        if 'unico' not in datos:
+                            datos['unico'] = df.groupby(COL_PARTIDO)[COL_VOTOS].sum()
                         else:
-                            datos['unico'] = df_valido
-                        votos_nacionales.append(df_valido.copy())
+                            datos['unico'] = datos['unico'].add(df.groupby(COL_PARTIDO)[COL_VOTOS].sum(), fill_value=0)
+                        votos_nacionales.append(df.groupby(COL_PARTIDO)[COL_VOTOS].sum())
                         archivos_ok.append(('DISTRITO UNICO', nombre, csv_info.get('source', 'individual')))
                     else:
                         region = detectar_region(nombre, REGLA_MULTIPLE_SENADO)
                         if region and region in REGLA_MULTIPLE_SENADO:
-                            if region in datos:
-                                datos[region] = pd.concat([datos[region], df_valido]).groupby(COL_PARTIDO)[COL_VOTOS].sum().reset_index()
+                            if region not in datos:
+                                datos[region] = df.groupby(COL_PARTIDO)[COL_VOTOS].sum()
                             else:
-                                datos[region] = df_valido
-                            votos_nacionales.append(df_valido.copy())
+                                datos[region] = datos[region].add(df.groupby(COL_PARTIDO)[COL_VOTOS].sum(), fill_value=0)
+                            votos_nacionales.append(df.groupby(COL_PARTIDO)[COL_VOTOS].sum())
                             archivos_ok.append((region, nombre, csv_info.get('source', 'individual')))
                         else:
                             archivos_error.append(f"{nombre}: Distrito no detectado")
 
             elif tipo_eleccion == 'andino':
-                votos_nacionales.append(df_valido.copy())
+                votos_nacionales.append(df.groupby(COL_PARTIDO)[COL_VOTOS].sum())
                 archivos_ok.append(('NACIONAL', nombre, csv_info.get('source', 'individual')))
 
-            # Liberar memoria del dataframe valido
-            del df_valido
+            # Liberar memoria INMEDIATAMENTE
+            del df
             gc.collect()
 
         except Exception as e:
@@ -399,10 +476,7 @@ if procesar and todos_csvs:
 
     # Consolidar para Andino
     if tipo_eleccion == 'andino' and votos_nacionales:
-        df_consolidado = pd.concat(votos_nacionales).groupby(COL_PARTIDO)[COL_VOTOS].sum().reset_index()
-        datos['nacional'] = df_consolidado[~df_consolidado[COL_PARTIDO].isin(EXCLUIR)].copy()
-        del df_consolidado
-        gc.collect()
+        datos['nacional'] = pd.concat(votos_nacionales).groupby(level=0).sum()
 
     progress_bar.empty()
     status_text.empty()
@@ -413,34 +487,41 @@ if procesar and todos_csvs:
                 st.markdown(f"- {err}")
 
     if not datos:
-        st.error("No se pudieron procesar archivos válidos. Verifica el formato.")
+        st.error("No se pudieron procesar archivos válidos.")
     else:
         st.success(f"✅ {len(archivos_ok)} archivos procesados correctamente.")
 
         # =====================================================
-        # CÁLCULOS ELECTORALES
+        # CÁLCULOS ELECTORALES (OPTIMIZADOS)
         # =====================================================
 
         if tipo_eleccion == 'diputados':
             # Valla doble
-            df_nacional = pd.concat(votos_nacionales).groupby(COL_PARTIDO)[COL_VOTOS].sum().reset_index()
+            df_nacional = pd.concat(votos_nacionales).groupby(level=0).sum().reset_index()
+            df_nacional.columns = [COL_PARTIDO, COL_VOTOS]
             total_votos = df_nacional[COL_VOTOS].sum()
             pasan_5 = df_nacional[df_nacional[COL_VOTOS] >= (total_votos * 0.05)][COL_PARTIDO].tolist()
 
+            # Simulación para valla 7
             escaños_sim = []
-            for region, df_v in datos.items():
+            for region, series in datos.items():
                 n = ESCAÑOS_DIPUTADOS_2026.get(region, 0)
                 if n > 0:
-                    escaños_sim.append(calcular_dhondt(df_v, n, COL_PARTIDO, COL_VOTOS))
+                    df_temp = series.reset_index()
+                    df_temp.columns = [COL_PARTIDO, COL_VOTOS]
+                    escaños_sim.append(calcular_dhondt(df_temp, n, COL_PARTIDO, COL_VOTOS))
 
             df_sim = pd.concat(escaños_sim).groupby('Partido')['Escaños'].sum().reset_index()
             pasan_7 = df_sim[df_sim['Escaños'] >= 7]['Partido'].tolist()
             partidos_aptos = list(set(pasan_5) & set(pasan_7))
 
+            # Reparto final
             resultados = []
-            for region, df_v in datos.items():
+            for region, series in datos.items():
                 n_esc = ESCAÑOS_DIPUTADOS_2026.get(region, 0)
-                df_f = df_v[df_v[COL_PARTIDO].isin(partidos_aptos)].copy()
+                df_temp = series.reset_index()
+                df_temp.columns = [COL_PARTIDO, COL_VOTOS]
+                df_f = df_temp[df_temp[COL_PARTIDO].isin(partidos_aptos)].copy()
                 if n_esc > 0 and not df_f.empty:
                     df_res = calcular_dhondt(df_f, n_esc, COL_PARTIDO, COL_VOTOS)
                     df_res['Region'] = region
@@ -455,46 +536,58 @@ if procesar and todos_csvs:
 
             total_escaños = int(cuadro.loc['TOTAL NACIONAL', 'TOTAL REGION'])
 
-            # Candidatos (procesar uno por uno para ahorrar memoria)
+            # Candidatos (procesar uno por uno)
             candidatos = []
-            for region, df_v in datos.items():
+            for region in datos.keys():
                 res_reg = df_final[df_final['Region'] == region]
                 if res_reg.empty: continue
+
+                # Re-leer archivos de esta región
                 archivos_reg = [c for c in todos_csvs if eliminar_tildes(c['name']).find(eliminar_tildes(region)) != -1]
                 if archivos_reg:
-                    dfs = []
+                    votos_partidos = {}
                     for c in archivos_reg:
                         c['content'].seek(0)
-                        df_temp = pd.read_csv(c['content'], low_memory=False, dtype=str)
+                        df_temp = pd.read_csv(c['content'], low_memory=False, dtype=str, usecols=lambda col: col in [COL_PARTIDO] or col.isdigit() or 'CANDIDATO' in col.upper())
                         df_temp.columns = df_temp.columns.str.strip()
-                        dfs.append(df_temp)
-                    df_mesas = pd.concat(dfs)
-                    cols_cands = [col for col in df_mesas.columns if col.isdigit() or 'CANDIDATO' in col.upper()]
-                    for _, fp in res_reg.iterrows():
-                        partido = fp['Partido']
-                        num_esc = int(fp['Escaños'])
+
+                        for _, fp in res_reg.iterrows():
+                            partido = fp['Partido']
+                            num_esc = int(fp['Escaños'])
+                            if num_esc > 0:
+                                if partido not in votos_partidos:
+                                    votos_partidos[partido] = {}
+
+                                df_p = df_temp[df_temp[COL_PARTIDO] == partido]
+                                cols_cands = [col for col in df_temp.columns if col != COL_PARTIDO and (col.isdigit() or 'CANDIDATO' in col.upper())]
+
+                                for col in cols_cands:
+                                    if col not in votos_partidos[partido]:
+                                        votos_partidos[partido][col] = 0
+                                    votos_partidos[partido][col] += pd.to_numeric(df_p[col], errors='coerce').sum()
+
+                        del df_temp
+                        gc.collect()
+
+                    # Determinar ganadores por partido
+                    for partido, votos_cands in votos_partidos.items():
+                        num_esc = int(res_reg[res_reg['Partido'] == partido]['Escaños'].iloc[0])
                         if num_esc > 0:
-                            df_p = df_mesas[df_mesas[COL_PARTIDO] == partido]
-                            votos_cands = []
-                            for col in cols_cands:
-                                total = pd.to_numeric(df_p[col], errors='coerce').sum()
-                                votos_cands.append({'Candidato': col, 'Votos': total})
-                            df_rank = pd.DataFrame(votos_cands)
-                            if not df_rank.empty:
-                                for _, g in df_rank.nlargest(num_esc, 'Votos').iterrows():
-                                    candidatos.append({'Región': region, 'Partido': partido, 'Candidato/Nro': g['Candidato'], 'Votos Preferenciales': int(g['Votos'])})
-                    del df_mesas, df_p, df_rank
-                    gc.collect()
+                            sorted_cands = sorted(votos_cands.items(), key=lambda x: x[1], reverse=True)[:num_esc]
+                            for cand, votos in sorted_cands:
+                                candidatos.append({'Región': region, 'Partido': partido, 'Candidato/Nro': cand, 'Votos Preferenciales': int(votos)})
 
             df_candidatos = pd.DataFrame(candidatos)
 
-            # Liberar memoria de dataframes grandes
+            # Liberar memoria
             del df_nacional, df_sim, df_final, resultados
             gc.collect()
 
         elif tipo_eleccion == 'senado':
-            df_unico = datos.get('unico', pd.DataFrame())
-            datos_mult = {k: v for k, v in datos.items() if k != 'unico'}
+            df_unico = datos.get('unico', pd.Series()).reset_index()
+            if not df_unico.empty:
+                df_unico.columns = [COL_PARTIDO, COL_VOTOS]
+            datos_mult = {k: v.reset_index().rename(columns={0: COL_PARTIDO, 1: COL_VOTOS}) for k, v in datos.items() if k != 'unico'}
 
             if df_unico.empty:
                 st.error("No se encontraron datos del Distrito Unico.")
@@ -503,13 +596,14 @@ if procesar and todos_csvs:
                 st.error("No se encontraron datos del Distrito Multiple.")
                 st.stop()
 
-            votos_nac_df = pd.concat(votos_nacionales).groupby(COL_PARTIDO)[COL_VOTOS].sum().reset_index()
+            votos_nac_df = pd.concat(votos_nacionales).groupby(level=0).sum().reset_index()
+            votos_nac_df.columns = [COL_PARTIDO, COL_VOTOS]
             total_v = votos_nac_df[COL_VOTOS].sum()
             pasan_5 = votos_nac_df[votos_nac_df[COL_VOTOS] >= (total_v * 0.05)][COL_PARTIDO].tolist()
 
             sim_u = calcular_dhondt(df_unico, ESCAÑOS_SENADO_UNICO, COL_PARTIDO, COL_VOTOS)
             sim_m = [calcular_dhondt(v, REGLA_MULTIPLE_SENADO.get(k, 1), COL_PARTIDO, COL_VOTOS) for k, v in datos_mult.items()]
-            df_sim = pd.concat([sim_u] + sim_m).groupby('Partido')['Escaños'].sum().reset_index()
+            df_sim = pd.concat(sim_u + sim_m).groupby('Partido')['Escaños'].sum().reset_index()
             pasan_3 = df_sim[df_sim['Escaños'] >= 3]['Partido'].tolist()
             partidos_aptos = list(set(pasan_5) & set(pasan_3))
 
@@ -526,12 +620,11 @@ if procesar and todos_csvs:
 
             if res_m:
                 matriz_reg = pd.concat(res_m).pivot(index='Region', columns='Partido', values='Escaños').fillna(0).astype(int)
+                fila_mult = matriz_reg.sum().to_frame().T
+                fila_mult.index = ['DISTRITO MULTIPLE (30 escaños)']
             else:
                 matriz_reg = pd.DataFrame()
-
-            fila_mult = matriz_reg.sum().to_frame().T if not matriz_reg.empty else pd.DataFrame()
-            if not fila_mult.empty:
-                fila_mult.index = ['DISTRITO MULTIPLE (30 escaños)']
+                fila_mult = pd.DataFrame()
 
             fila_u = res_u.set_index('Partido')['Escaños'].to_frame().T
             fila_u.index = ['DISTRITO UNICO (30 escaños)']
@@ -563,14 +656,15 @@ if procesar and todos_csvs:
             total_escaños = int(cuadro.loc['TOTAL PARTIDO', 'TOTAL'])
             df_candidatos = pd.DataFrame()
 
-            del votos_nac_df, sim_u, sim_m, df_sim, res_u, res_m, matriz_reg, fila_mult, fila_u
+            del votos_nac_df, sim_u, sim_m, df_sim, res_u, res_m
             gc.collect()
 
         else:  # andino
-            df_nac = datos.get('nacional', pd.DataFrame())
-            total_validos = df_nac[COL_VOTOS].sum()
-            partidos_aptos = df_nac[df_nac[COL_VOTOS] >= (total_validos * 0.05)][COL_PARTIDO].tolist()
-            df_reparto = df_nac[df_nac[COL_PARTIDO].isin(partidos_aptos)].copy()
+            df_nac = datos.get('nacional', pd.Series())
+            total_validos = df_nac.sum()
+            partidos_aptos = df_nac[df_nac >= (total_validos * 0.05)].index.tolist()
+            df_reparto = df_nac[df_nac.index.isin(partidos_aptos)].reset_index()
+            df_reparto.columns = [COL_PARTIDO, COL_VOTOS]
 
             res = calcular_dhondt(df_reparto, ESCAÑOS_ANDINO, COL_PARTIDO, COL_VOTOS)
             res = res.sort_values('Escaños', ascending=False)
@@ -587,13 +681,14 @@ if procesar and todos_csvs:
             gc.collect()
 
         # =====================================================
-        # CRUCE CON EXCEL
+        # CRUCE CON EXCEL (OPTIMIZADO)
         # =====================================================
         if uploaded_excel and not df_candidatos.empty and tipo_eleccion == 'diputados':
             try:
                 df_maestro = pd.read_excel(uploaded_excel)
                 df_maestro.columns = df_maestro.columns.str.strip().str.upper()
 
+                # Normalizar claves
                 df_candidatos['REGION_KEY'] = df_candidatos['Región'].apply(eliminar_tildes).str.strip()
                 df_maestro['REGION_KEY'] = df_maestro['REGION'].apply(eliminar_tildes).str.strip()
                 df_candidatos['PARTIDO_KEY'] = df_candidatos['Partido'].apply(eliminar_tildes).str.strip()
@@ -661,8 +756,8 @@ if procesar and todos_csvs:
                 col_a1, col_a2 = st.columns(2)
                 with col_a1:
                     st.markdown("**Valla 5% (Nacional)**")
-                    # Recalcular para mostrar
-                    df_nac_temp = pd.concat(votos_nacionales).groupby(COL_PARTIDO)[COL_VOTOS].sum().reset_index()
+                    df_nac_temp = pd.concat(votos_nacionales).groupby(level=0).sum().reset_index()
+                    df_nac_temp.columns = [COL_PARTIDO, COL_VOTOS]
                     total_v_temp = df_nac_temp[COL_VOTOS].sum()
                     p5 = df_nac_temp[df_nac_temp[COL_VOTOS] >= (total_v_temp * 0.05)][COL_PARTIDO].tolist()
                     df_5 = df_nac_temp[df_nac_temp[COL_PARTIDO].isin(p5)].sort_values(COL_VOTOS, ascending=False)
