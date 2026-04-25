@@ -241,20 +241,7 @@ def obtener_csvs(uploaded_files, uploaded_zip, uploaded_rar, uploaded_zip_unico=
 
     return todos_csvs
 
-@st.cache_data(show_spinner=False, ttl=3600)
-def _procesar_csvs_cached(csv_list_bytes, tipo_eleccion):
-    # Reconstruir lista de CSVs desde bytes
-    csv_list = []
-    for item in csv_list_bytes:
-        csv_list.append({
-            'name': item['name'],
-            'content': io.BytesIO(item['content']),
-            'source': item.get('source', 'individual'),
-            'distrito': item.get('distrito', 'auto')
-        })
-    return _procesar_csvs_internal(csv_list, tipo_eleccion)
-
-def _procesar_csvs_internal(csv_list, tipo_eleccion):
+def procesar_csvs(csv_list, tipo_eleccion):
     datos = {}
     votos_nacionales = []
     archivos_ok = []
@@ -517,7 +504,7 @@ with col_btn2:
 # ============================================================
 if procesar and todos_csvs:
     with st.spinner(f"Procesando {tipo_eleccion.upper()}..."):
-        datos, votos_nac, archivos_ok, archivos_error = _procesar_csvs_internal(todos_csvs, tipo_eleccion)
+        datos, votos_nac, archivos_ok, archivos_error = procesar_csvs(todos_csvs, tipo_eleccion)
 
         if archivos_error:
             with st.expander(f"⚠️ Errores ({len(archivos_error)})"):
