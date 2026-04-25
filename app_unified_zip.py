@@ -782,3 +782,16 @@ if 'cuadro' in locals() and datos:
             st.subheader("Archivos procesados")
             for reg, nom, src in archivos_ok:
                 st.markdown(f"- {nom} ({src})")
+
+
+        with tab2:
+            st.subheader("Resumen Técnico")
+            st.markdown(f"""
+            **Método:** DHondt  
+            **Escaños:** {ESCAÑOS_ANDINO}  
+            **Valla:** 5% nacional  
+            **Partidos aptos:** {len(partidos_aptos)}
+            """)
+            st.subheader("Archivos procesados")
+            for reg, nom, src in archivos_ok:
+                st.markdown(f"- {nom} ({src})")
