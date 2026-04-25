@@ -1,4 +1,5 @@
 import streamlit as st
+import gc
 import pandas as pd
 import unicodedata
 import io
@@ -240,7 +241,20 @@ def obtener_csvs(uploaded_files, uploaded_zip, uploaded_rar, uploaded_zip_unico=
 
     return todos_csvs
 
-def procesar_csvs(csv_list, tipo_eleccion):
+@st.cache_data(show_spinner=False, ttl=3600)
+def _procesar_csvs_cached(csv_list_bytes, tipo_eleccion):
+    # Reconstruir lista de CSVs desde bytes
+    csv_list = []
+    for item in csv_list_bytes:
+        csv_list.append({
+            'name': item['name'],
+            'content': io.BytesIO(item['content']),
+            'source': item.get('source', 'individual'),
+            'distrito': item.get('distrito', 'auto')
+        })
+    return _procesar_csvs_internal(csv_list, tipo_eleccion)
+
+def _procesar_csvs_internal(csv_list, tipo_eleccion):
     datos = {}
     votos_nacionales = []
     archivos_ok = []
@@ -251,7 +265,7 @@ def procesar_csvs(csv_list, tipo_eleccion):
         distrito = csv_info.get('distrito', 'auto')
         try:
             csv_info['content'].seek(0)
-            df = pd.read_csv(csv_info['content'])
+            df = pd.read_csv(csv_info['content'], low_memory=False, dtype=str)
             df.columns = df.columns.str.strip()
 
             if COL_PARTIDO not in df.columns or COL_VOTOS not in df.columns:
@@ -418,7 +432,7 @@ with st.sidebar:
         <b>🏛️ DIPUTADOS</b><br>
         • 130 escaños<br>
         • Doble valla: 5% nacional + 7 escaños distritales<br>
-        • Metodo D'Hondt por región<br><br>
+        • Metodo DHondt por región<br><br>
         <b>📦 Formato ZIP esperado:</b><br>
         PR-ESP_Diputados_2026_AMAZONAS.csv<br>
         PR-ESP_Diputados_2026_ANCASH.csv<br>
@@ -463,7 +477,7 @@ with st.sidebar:
 st.markdown('<div class="main-header">🇵🇪 Simulador Electoral Perú 2026</div>', unsafe_allow_html=True)
 
 if tipo_eleccion == 'diputados':
-    st.markdown("<div class='sub-header'><span class='election-badge badge-diputados'>🏛️ DIPUTADOS</span> 130 Escaños · Doble Valla Electoral · D'Hondt</div>", unsafe_allow_html=True)
+    st.markdown("<div class='sub-header'><span class='election-badge badge-diputados'>🏛️ DIPUTADOS</span> 130 Escaños · Doble Valla Electoral · DHondt</div>", unsafe_allow_html=True)
 elif tipo_eleccion == 'senado':
     st.markdown('<div class="sub-header"><span class="election-badge badge-senado">⚖️ SENADO</span> 60 Escaños · 30 Unico + 30 Multiple</div>', unsafe_allow_html=True)
 else:
@@ -512,7 +526,7 @@ if procesar and todos_csvs:
 
         if not datos:
             st.error("No se pudieron procesar archivos válidos. Verifica el formato.")
-            st.stop()
+            st.error('Procesamiento detenido. Corrija los errores arriba.'); st.stop()
 
         # =====================================================
         # LÓGICA: DIPUTADOS
@@ -560,7 +574,7 @@ if procesar and todos_csvs:
                     dfs = []
                     for c in archivos_reg:
                         c['content'].seek(0)
-                        df_temp = pd.read_csv(c['content'])
+                        df_temp = pd.read_csv(c['content'], low_memory=False, dtype=str)
                         df_temp.columns = df_temp.columns.str.strip()
                         dfs.append(df_temp)
                     df_mesas = pd.concat(dfs)
@@ -592,10 +606,10 @@ if procesar and todos_csvs:
 
             if df_unico.empty:
                 st.error("No se encontraron datos del Distrito Unico. Verifica el archivo ZIP/RAR del Distrito Unico.")
-                st.stop()
+                st.error('Procesamiento detenido. Corrija los errores arriba.'); st.stop()
             if not datos_mult:
                 st.error("No se encontraron datos del Distrito Multiple. Verifica el archivo ZIP/RAR del Distrito Multiple.")
-                st.stop()
+                st.error('Procesamiento detenido. Corrija los errores arriba.'); st.stop()
 
             votos_nac_df = pd.concat(votos_nac).groupby(COL_PARTIDO)[COL_VOTOS].sum().reset_index()
             total_v = votos_nac_df[COL_VOTOS].sum()
@@ -779,7 +793,7 @@ if procesar and todos_csvs:
         with tab4:
             st.subheader("Resumen Técnico")
             st.markdown(f"""
-            **Método:** D'Hondt  
+            **Método:** DHondt  
             **Valla:** Doble (5% nacional = {total_votos*0.05:,.0f} votos + 7 escaños distritales)  
             **Partidos en 5%:** {len(pasan_5)}  
             **Partidos en 7:** {len(pasan_7)}  
@@ -838,7 +852,7 @@ if procesar and todos_csvs:
         with tab3:
             st.subheader("Resumen Técnico")
             st.markdown(f"""
-            **Método:** D'Hondt  
+            **Método:** DHondt  
             **Distrito Único:** {ESCAÑOS_SENADO_UNICO} escaños  
             **Distrito Múltiple:** {ESCAÑOS_SENADO_MULTIPLE} escaños  
             **Total:** {ESCAÑOS_SENADO_UNICO + ESCAÑOS_SENADO_MULTIPLE} escaños  
@@ -874,7 +888,7 @@ if procesar and todos_csvs:
         with tab2:
             st.subheader("Resumen Técnico")
             st.markdown(f"""
-            **Método:** D'Hondt  
+            **Método:** DHondt  
             **Escaños:** {ESCAÑOS_ANDINO}  
             **Valla:** 5% nacional ({total_validos*0.05:,.0f} votos)  
             **Partidos aptos:** {len(partidos_aptos)}
@@ -896,7 +910,7 @@ else:
         <h4>👋 Bienvenido al Simulador Electoral Integral Perú 2026</h4>
         <p>Esta aplicación unifica el cálculo de las <b>3 elecciones</b> en una sola plataforma web:</p>
         <ul>
-            <li><span class="election-badge badge-diputados">🏛️ DIPUTADOS</span> 130 escaños · D'Hondt · Doble valla</li>
+            <li><span class="election-badge badge-diputados">🏛️ DIPUTADOS</span> 130 escaños · DHondt · Doble valla</li>
             <li><span class="election-badge badge-senado">⚖️ SENADO</span> 60 escaños · 30 Único + 30 Múltiple</li>
             <li><span class="election-badge badge-andino">🌎 PARLAMENTO ANDINO</span> 5 escaños · Circunscripción única</li>
         </ul>
@@ -927,5 +941,5 @@ else:
         st.markdown(f"""
         • **Escaños:** {ESCAÑOS_ANDINO}  
         • **Valla:** 5% nacional  
-        • **Método:** D'Hondt simple
+        • **Método:** DHondt simple
         """)
